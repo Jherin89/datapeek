@@ -97,6 +97,19 @@ pub struct Loaded {
     pub kind: FileKind,
     pub outcome: ReadOutcome,
     pub sheet: Option<String>,
+    pub warnings: Vec<ParseWarning>,
+}
+
+/// A problem observed while parsing the profiled input.
+#[derive(Debug, Clone, Serialize)]
+pub struct ParseWarning {
+    pub code: &'static str,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column: Option<String>,
+    /// Exact count when the source reader exposes one (Excel cells).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<usize>,
 }
 
 /// Load a tabular file into a DataFrame.
@@ -112,6 +125,16 @@ pub fn load(
     columns: Option<&[String]>,
     rows: RowSelect,
     sheet: Option<&str>,
+) -> Result<Loaded> {
+    load_with_policy(path, columns, rows, sheet, false)
+}
+
+pub fn load_with_policy(
+    path: &Path,
+    columns: Option<&[String]>,
+    rows: RowSelect,
+    sheet: Option<&str>,
+    strict: bool,
 ) -> Result<Loaded> {
     if matches!(rows, RowSelect::Head(0) | RowSelect::Sample { n: 0, .. }) {
         return Err(Error::new("row limit must be at least 1"));
@@ -136,9 +159,10 @@ pub fn load(
         )));
     }
 
+    let mut warnings = Vec::new();
     let (df, outcome, sheet_name) = match kind {
         FileKind::Csv { sep } => {
-            let (df, outcome) = load_csv(path, sep, rows)?;
+            let (df, outcome) = load_csv(path, sep, rows, strict, &mut warnings)?;
             (df, outcome, None)
         }
         FileKind::Parquet => {
@@ -150,8 +174,9 @@ pub fn load(
             (df, outcome, None)
         }
         FileKind::Excel(_) => {
-            let (df, outcome, name) = excel::load_excel(path, rows, sheet)?;
-            (df, outcome, Some(name))
+            let loaded = excel::load_excel_with_policy(path, rows, sheet, columns, strict)?;
+            warnings = loaded.warnings;
+            (loaded.df, loaded.outcome, Some(loaded.sheet))
         }
     };
 
@@ -168,6 +193,7 @@ pub fn load(
         kind,
         outcome,
         sheet: sheet_name,
+        warnings,
     })
 }
 
@@ -294,36 +320,109 @@ fn split_count(line: &str, sep: u8) -> usize {
     n
 }
 
-fn load_csv(path: &Path, sep: u8, rows: RowSelect) -> Result<(DataFrame, ReadOutcome)> {
+fn load_csv(
+    path: &Path,
+    sep: u8,
+    rows: RowSelect,
+    strict: bool,
+    warnings: &mut Vec<ParseWarning>,
+) -> Result<(DataFrame, ReadOutcome)> {
     match rows {
         RowSelect::All => {
-            let df = read_csv(path, sep, None)?;
+            let df = checked_csv(strict, warnings, |ignore| read_csv(path, sep, ignore))?;
             Ok((df, ReadOutcome::full()))
         }
-        RowSelect::Head(n) => {
-            // One extra row tells us whether the file is longer than N
-            // without scanning the rest.
-            let df = read_csv(path, sep, Some(n + 1))?;
-            Ok(trim_head(df, n))
-        }
-        RowSelect::Sample { n, seed } => sample_csv(path, sep, n, seed),
+        RowSelect::Head(n) => head_csv(path, sep, n, strict, warnings),
+        RowSelect::Sample { n, seed } => sample_csv(path, sep, n, seed, strict, warnings),
     }
 }
 
-fn read_csv(path: &Path, sep: u8, n_rows: Option<usize>) -> Result<DataFrame> {
-    let mut reader = LazyCsvReader::new(path)
+fn head_csv(
+    path: &Path,
+    sep: u8,
+    n: usize,
+    strict: bool,
+    warnings: &mut Vec<ParseWarning>,
+) -> Result<(DataFrame, ReadOutcome)> {
+    // Bound typed parsing to the requested records. Reader read-ahead and the
+    // extra record used to establish the mode must not taint this profile.
+    let mut reader = csv::ReaderBuilder::new()
+        .delimiter(sep)
+        .flexible(true)
+        .from_path(path)
+        .map_err(|err| Error::io(path, err))?;
+    let header = reader
+        .byte_headers()
+        .map_err(|err| wrap_parse(path, err))?
+        .clone();
+    let mut buf = Vec::new();
+    let mut writer = csv::WriterBuilder::new()
+        .delimiter(sep)
+        .flexible(true)
+        .from_writer(&mut buf);
+    writer
+        .write_byte_record(&header)
+        .map_err(|err| wrap_parse(path, err))?;
+    let mut record = csv::ByteRecord::new();
+    let mut count = 0;
+    while count < n
+        && reader
+            .read_byte_record(&mut record)
+            .map_err(|err| wrap_parse(path, err))?
+    {
+        writer
+            .write_byte_record(&record)
+            .map_err(|err| wrap_parse(path, err))?;
+        count += 1;
+    }
+    writer.flush().map_err(|err| wrap_parse(path, err))?;
+    drop(writer);
+    // A malformed next record also establishes that the input continues;
+    // it is outside the requested prefix and is not part of validation.
+    let has_more = count == n && !matches!(reader.read_byte_record(&mut record), Ok(false));
+    let df = checked_csv(strict, warnings, |ignore| {
+        parse_csv_bytes(path, sep, &buf, ignore)
+    })?;
+    let outcome = if has_more {
+        ReadOutcome::head(n)
+    } else {
+        ReadOutcome::full()
+    };
+    Ok((df, outcome))
+}
+
+fn read_csv(path: &Path, sep: u8, ignore_errors: bool) -> Result<DataFrame> {
+    LazyCsvReader::new(path)
         .with_has_header(true)
         .with_separator(sep)
         .with_infer_schema_length(Some(10_000))
         .with_try_parse_dates(true)
-        .with_ignore_errors(true);
-    if let Some(n) = n_rows {
-        reader = reader.with_n_rows(Some(n));
-    }
-    reader
+        .with_ignore_errors(ignore_errors)
         .finish()
         .and_then(|lf| lf.collect())
-        .map_err(|err| wrap_parse(path, err))
+        .map_err(|err| Error::csv_parse(path, err))
+}
+
+fn checked_csv(
+    strict: bool,
+    warnings: &mut Vec<ParseWarning>,
+    mut read: impl FnMut(bool) -> Result<DataFrame>,
+) -> Result<DataFrame> {
+    match read(false) {
+        Ok(df) => Ok(df),
+        Err(err) if strict => Err(err),
+        Err(err) => {
+            // Only warn after the legacy tolerant reader actually succeeds.
+            let df = read(true)?;
+            warnings.push(ParseWarning {
+                code: "csv_parse_errors",
+                message: "Profile created, but some CSV values could not be read and are counted as missing. Run with --strict to see the problem and stop instead.".into(),
+                column: err.column().map(str::to_string),
+                count: None,
+            });
+            Ok(df)
+        }
+    }
 }
 
 fn sample_csv(
@@ -331,6 +430,8 @@ fn sample_csv(
     sep: u8,
     n: usize,
     seed: Option<u64>,
+    strict: bool,
+    warnings: &mut Vec<ParseWarning>,
 ) -> Result<(DataFrame, ReadOutcome)> {
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(sep)
@@ -367,7 +468,7 @@ fn sample_csv(
 
     if total <= n {
         // Same loader as an unsampled profile, so types match exactly.
-        let df = read_csv(path, sep, None)?;
+        let df = checked_csv(strict, warnings, |ignore| read_csv(path, sep, ignore))?;
         return Ok((df, ReadOutcome::full()));
     }
 
@@ -388,16 +489,22 @@ fn sample_csv(
         writer.flush().map_err(|err| wrap_parse(path, err))?;
     }
 
-    let df = CsvReadOptions::default()
+    let df = checked_csv(strict, warnings, |ignore| {
+        parse_csv_bytes(path, sep, &buf, ignore)
+    })?;
+    Ok((df, ReadOutcome::random(n, seed)))
+}
+
+fn parse_csv_bytes(path: &Path, sep: u8, buf: &[u8], ignore_errors: bool) -> Result<DataFrame> {
+    CsvReadOptions::default()
         .with_has_header(true)
         .with_infer_schema_length(Some(10_000))
-        .with_ignore_errors(true)
+        .with_ignore_errors(ignore_errors)
         .with_raise_if_empty(false)
         .map_parse_options(|opts| opts.with_separator(sep).with_try_parse_dates(true))
         .into_reader_with_file_handle(Cursor::new(buf))
         .finish()
-        .map_err(|err| wrap_parse(path, err))?;
-    Ok((df, ReadOutcome::random(n, seed)))
+        .map_err(|err| Error::csv_parse(path, err))
 }
 
 fn load_parquet(

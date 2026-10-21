@@ -4,7 +4,7 @@ use polars::prelude::*;
 use serde::Serialize;
 
 use crate::error::Result;
-use crate::load::{self, ReadMode, RowSelect};
+use crate::load::{self, ParseWarning, ReadMode, RowSelect};
 use crate::sparkline::{self, BINS};
 
 const TOP_N: usize = 3;
@@ -102,6 +102,8 @@ pub struct FileProfile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sheet: Option<String>,
     pub profile: Vec<ColumnProfile>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ParseWarning>,
 }
 
 /// What to profile. The default is the whole file and, for Excel, the first sheet.
@@ -110,6 +112,8 @@ pub struct ProfileOptions<'a> {
     pub columns: Option<&'a [String]>,
     pub rows: RowSelect,
     pub sheet: Option<&'a str>,
+    /// Reject parsing errors instead of returning a profile with warnings.
+    pub strict: bool,
 }
 
 impl Default for ProfileOptions<'static> {
@@ -118,6 +122,7 @@ impl Default for ProfileOptions<'static> {
             columns: None,
             rows: RowSelect::All,
             sheet: None,
+            strict: false,
         }
     }
 }
@@ -130,7 +135,7 @@ impl FileProfile {
 
 /// Profile a data file at `path`.
 pub fn profile_path(path: &Path, opts: &ProfileOptions<'_>) -> Result<FileProfile> {
-    let loaded = load::load(path, opts.columns, opts.rows, opts.sheet)?;
+    let loaded = load::load_with_policy(path, opts.columns, opts.rows, opts.sheet, opts.strict)?;
     Ok(profile_loaded(path, loaded))
 }
 
@@ -152,6 +157,7 @@ pub fn profile_loaded(path: &Path, loaded: load::Loaded) -> FileProfile {
         format: load::format_name(loaded.kind),
         sheet: loaded.sheet,
         profile,
+        warnings: loaded.warnings,
     }
 }
 
@@ -624,6 +630,7 @@ mod tests {
                 seed: Some(4),
             },
             sheet: None,
+            strict: false,
         };
         let a = profile_path(&jsonl, &sample).unwrap();
         let b = profile_path(&jsonl, &sample).unwrap();
@@ -637,6 +644,7 @@ mod tests {
                 columns: None,
                 rows: RowSelect::Head(20),
                 sheet: None,
+                strict: false,
             },
         )
         .unwrap();
@@ -666,6 +674,7 @@ mod tests {
                 seed: Some(8),
             },
             sheet: None,
+            strict: false,
         };
         let once = profile_path(&pq, &projected).unwrap();
         let twice = profile_path(&pq, &projected).unwrap();
@@ -679,6 +688,7 @@ mod tests {
                 columns: Some(&cols),
                 rows: RowSelect::Head(15),
                 sheet: None,
+                strict: false,
             },
         )
         .unwrap();

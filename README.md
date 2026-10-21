@@ -322,6 +322,8 @@ datapeek [OPTIONS] <FILE>
 | --- | --- |
 | `<FILE>` | Data file to profile. Required. |
 | `--json` | Pretty-printed JSON profile instead of the table. |
+| `--strict` | Fail on CSV/TSV parsing errors or Excel error cells. Writes no profile on failure. |
+| `--verbose` | Include technical details for CSV/TSV parsing errors. |
 | `-c, --columns <COLS>` | Comma-separated column names to keep, in the order you list them. |
 | `--sample <N>` | Uniform random sample of N rows from the whole file. If N is at least the row count, every row is used and the profile is a full read. Cannot be combined with `--head`. |
 | `--seed <SEED>` | `u64` seed for `--sample`. The same seed profiles the same rows. Requires `--sample`. Omit it and each run draws a new sample. |
@@ -336,6 +338,11 @@ datapeek [OPTIONS] <FILE>
 `null` when you did not pass one. `sampled` is true only for a strict subset
 (`head` or `random`). `sample_limit` is the N you asked for, and it is
 omitted when the profile covers the whole file. `sheet` is present for Excel.
+`warnings` is present only when parsing problems were tolerated. Each warning
+has a stable `code` and a `message`, with a `column` when available. Excel
+warnings also have an exact error-cell `count`. CSV warnings omit the count
+because the reader does not expose it. Warnings also appear on stderr,
+leaving stdout as valid JSON.
 
 ```bash
 datapeek --json samples/orders.csv
@@ -701,6 +708,46 @@ A file that is not actually the format it claims to be exits `1` with
 header is a parse error too.
 
 ### Exit codes and errors
+
+By default, CSV/TSV parsing first tries a strict read. If it fails and a
+tolerant read succeeds, datapeek writes the profile and a warning:
+
+```text
+datapeek: warning: Profile created, but some CSV values could not be read and are counted as missing. Run with --strict to see the problem and stop instead.
+```
+
+Excel error cells remain included in missingness for compatibility. A warning
+counts them separately from blanks, per selected column, and identifies the
+first error cell:
+
+```text
+datapeek: warning: Profile created with 1 Excel error cell counted as missing in column 'amount' (sheet 'Sheet1', first at A3: #DIV/0!). Fix the cell in Excel, then save the workbook and try again.
+```
+
+With `--strict`, these problems exit `1`, write the error to stderr, and
+write no profile to stdout. Genuine blank cells are allowed. Strict mode
+checks parsing against inferred types; it does not enforce a business schema.
+For example, a column inferred as text can contain both numbers and words.
+
+CSV value errors show the column, its inferred value type in plain language,
+and a preview of the offending value. They also show a command to inspect the
+same input without strict mode. Excel errors show the sheet, column, and
+absolute worksheet cell address. The retry command preserves the current
+options and quotes file paths for PowerShell on Windows or a POSIX shell on
+macOS/Linux. CSV parser details are available with `--verbose`.
+
+With `--head`, CSV value checks cover only the first N records. With
+`--sample`, they cover the sampled records; sampling still scans the file
+and can fail on malformed record structure outside the sample. CSV readers
+validate every loaded column, including columns omitted by `--columns`.
+Excel checks error cells only in the selected data rows and columns of the
+selected sheet. Header cells are used to form column names. A successful
+partial profile does not certify the rest of the file.
+
+```bash
+datapeek --strict samples/orders.csv
+datapeek --strict --json --sheet Orders samples/orders.xlsx
+```
 
 | Exit | When |
 | --- | --- |

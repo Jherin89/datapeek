@@ -542,3 +542,341 @@ fn empty_file_exits_nonzero() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("empty"));
 }
+
+// The anomaly must be outside the 10,000-row CSV schema inference window.
+fn late_bad_csv(path: &Path) {
+    let mut body = String::from("amount\n");
+    for _ in 0..10_000 {
+        body.push_str("42\n");
+    }
+    body.push_str("oops\n");
+    fs::write(path, body).unwrap();
+}
+
+fn error_workbook(path: &Path) {
+    use rust_xlsxwriter::{Formula, Workbook};
+    let mut workbook = Workbook::new();
+    let sheet = workbook.add_worksheet();
+    sheet.write_string(0, 0, "amount").unwrap();
+    sheet.write_string(0, 1, "id").unwrap();
+    sheet.write_number(1, 0, 42).unwrap();
+    sheet.write_number(1, 1, 1).unwrap();
+    sheet
+        .write_formula(2, 0, Formula::new("=1/0").set_result("#DIV/0!"))
+        .unwrap();
+    sheet.write_number(2, 1, 2).unwrap();
+    // An id keeps the blank amount row inside the sheet's used range.
+    sheet.write_number(3, 1, 3).unwrap();
+    workbook.save(path).unwrap();
+}
+
+#[test]
+fn csv_parse_errors_are_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("late-bad.csv");
+    late_bad_csv(&path);
+    use polars::prelude::*;
+    let strict_read = LazyCsvReader::new(&path)
+        .with_has_header(true)
+        .with_infer_schema_length(Some(10_000))
+        .with_ignore_errors(false)
+        .finish()
+        .and_then(|lf| lf.collect());
+    assert!(
+        strict_read.is_err(),
+        "strict reader must detect the anomaly"
+    );
+    let out = run(&["--json", path.to_str().unwrap()]);
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["rows"], 10_001);
+    assert!(column(&v, "amount")["missing_pct"].as_f64().unwrap() > 0.0);
+    assert_eq!(v["warnings"][0]["code"], "csv_parse_errors", "{v}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--strict"));
+    let table = run(&[path.to_str().unwrap()]);
+    assert!(table.status.success());
+    assert!(String::from_utf8_lossy(&table.stdout).contains("amount"));
+    assert!(String::from_utf8_lossy(&table.stderr)
+        .contains("Profile created, but some CSV values could not be read"));
+}
+
+#[test]
+fn excel_cell_errors_are_reported_separately_from_blanks() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("errors.xlsx");
+    error_workbook(&path);
+    use calamine::{open_workbook_auto, Data, Reader};
+    let mut book = open_workbook_auto(&path).unwrap();
+    let range = book.worksheet_range("Sheet1").unwrap();
+    assert!(matches!(range.get((2, 0)), Some(Data::Error(_))));
+    assert!(matches!(range.get((3, 0)), Some(Data::Empty)));
+    let out = run(&["--json", path.to_str().unwrap()]);
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["rows"], 3);
+    assert!((column(&v, "amount")["missing_pct"].as_f64().unwrap() - 200.0 / 3.0).abs() < 1e-9);
+    assert_eq!(v["warnings"][0]["code"], "excel_cell_errors", "{v}");
+    assert_eq!(v["warnings"][0]["column"], "amount");
+    assert_eq!(v["warnings"][0]["count"], 1);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("1 Excel error cell"));
+}
+
+#[test]
+fn strict_csv_rejects_tolerated_errors_without_a_profile() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("late-bad.csv");
+    late_bad_csv(&path);
+    for extra in [vec![], vec!["--head", "10001"], vec!["--sample", "20000"]] {
+        let mut args = vec!["--json", "--strict", path.to_str().unwrap()];
+        args.extend(extra);
+        let out = run(&args);
+        assert_eq!(out.status.code(), Some(1));
+        assert!(out.stdout.is_empty());
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("Column: amount") && err.contains("oops"),
+            "{err}"
+        );
+    }
+}
+
+#[test]
+fn head_csv_does_not_report_errors_outside_the_profile() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("late-bad.csv");
+    late_bad_csv(&path);
+    for extra in [vec![], vec!["--strict"]] {
+        let mut args = vec!["--json", "--head", "10000", path.to_str().unwrap()];
+        args.extend(extra);
+        let out = run(&args);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.stderr.is_empty());
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["rows"], 10_000);
+        assert_eq!(v["mode"], "head");
+        assert!(v.get("warnings").is_none());
+    }
+}
+
+#[test]
+fn random_csv_sample_reports_and_rejects_its_parse_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sample-bad.csv");
+    let body = format!("amount\n{}oops\n", "42\n".repeat(20_000));
+    fs::write(&path, body).unwrap();
+    // Pin a seed that includes the final anomaly after the inference window.
+    let seed = (0..100)
+        .find(|seed| {
+            datapeek::sample::sample_indices(20_001, 15_000, Some(*seed)).contains(&20_000)
+        })
+        .unwrap()
+        .to_string();
+    let args = [
+        "--json",
+        "--sample",
+        "15000",
+        "--seed",
+        &seed,
+        path.to_str().unwrap(),
+    ];
+    let tolerant = run(&args);
+    assert!(tolerant.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&tolerant.stdout).unwrap();
+    assert_eq!(v["mode"], "random");
+    assert_eq!(v["warnings"][0]["code"], "csv_parse_errors");
+    assert!(v["warnings"][0].get("count").is_none());
+    let mut strict_args = args.to_vec();
+    strict_args.push("--strict");
+    let strict = run(&strict_args);
+    assert_eq!(strict.status.code(), Some(1));
+    assert!(strict.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&strict.stderr).contains("oops"));
+}
+
+#[test]
+fn excel_strict_and_warnings_respect_row_and_column_selection() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("errors.xlsx");
+    error_workbook(&path);
+    let file = path.to_str().unwrap();
+    let out = run(&["--strict", "--json", file]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Column: amount"));
+    for selection in [vec!["--columns", "id"], vec!["--head", "1"]] {
+        for strict in [false, true] {
+            let mut args = vec!["--json", file];
+            args.extend_from_slice(&selection);
+            if strict {
+                args.push("--strict");
+            }
+            let out = run(&args);
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(out.stderr.is_empty());
+            let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+            assert!(v.get("warnings").is_none());
+        }
+    }
+    // Random sample diagnostics count only chosen cells, rather than the sheet.
+    for seed in ["0", "1", "2", "3"] {
+        let out = run(&["--json", "--sample", "1", "--seed", seed, file]);
+        assert!(out.status.success());
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let index = datapeek::sample::sample_indices(3, 1, Some(seed.parse().unwrap()))[0];
+        if index == 1 {
+            assert_eq!(v["warnings"][0]["count"], 1);
+        } else {
+            assert!(v.get("warnings").is_none());
+        }
+        let strict = run(&["--strict", "--json", "--sample", "1", "--seed", seed, file]);
+        assert_eq!(strict.status.success(), index != 1);
+        if index == 1 {
+            assert!(strict.stdout.is_empty());
+            assert!(String::from_utf8_lossy(&strict.stderr).contains("Excel error cell"));
+        }
+    }
+}
+
+#[test]
+fn clean_inputs_and_true_blanks_pass_strict_mode() {
+    for name in [
+        "orders.csv",
+        "events.tsv",
+        "metrics.jsonl",
+        "orders.parquet",
+        "orders.xlsx",
+    ] {
+        let path = sample(name);
+        let out = run(&["--strict", "--json", path.to_str().unwrap()]);
+        assert!(
+            out.status.success(),
+            "{name}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.stderr.is_empty());
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert!(v.get("warnings").is_none());
+    }
+}
+
+#[test]
+fn head_csv_preserves_quotes_multiline_fields_and_short_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("quoted.csv");
+    fs::write(
+        &path,
+        "id,note,amount\r\n1,\"hello,\r\nworld\",42\r\n2,short\r\n3,end,7\r\n",
+    )
+    .unwrap();
+    for limit in ["2", "3", "4"] {
+        let out = run(&[
+            "--strict",
+            "--json",
+            "--head",
+            limit,
+            path.to_str().unwrap(),
+        ]);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.stderr.is_empty());
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["rows"], limit.parse::<u64>().unwrap().min(3));
+        assert!(column(&v, "note")["top_values"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["value"] == "hello,\r\nworld"));
+        assert_eq!(v["mode"], if limit == "2" { "head" } else { "full" });
+    }
+}
+
+#[test]
+fn strict_errors_explain_the_problem_and_offer_a_usable_next_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let csv = dir.path().join("bad data's.csv");
+    late_bad_csv(&csv);
+    let out = run(&["--strict", "--json", csv.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("Column: amount"), "{err}");
+    assert!(err.contains("Expected: whole numbers"), "{err}");
+    assert!(err.contains("Found: \"oops\""), "{err}");
+    assert!(err.contains("No profile was created."), "{err}");
+    assert!(err.contains("To get a profile anyway"), "{err}");
+    assert!(
+        !err.contains("dtype") && !err.contains("infer_schema_length") && !err.contains("offset"),
+        "{err}"
+    );
+    let retry = err
+        .split("Problem values will count as missing:\n  ")
+        .nth(1)
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap();
+    assert!(!retry.contains("--strict"));
+    // Execute the displayed command, including the filename's spaces and apostrophe.
+    let mut shell = if cfg!(windows) {
+        Command::new("powershell.exe")
+    } else {
+        Command::new("sh")
+    };
+    if cfg!(windows) {
+        shell.args(["-NoProfile", "-NonInteractive", "-Command"]);
+    } else {
+        shell.arg("-c");
+    }
+    let retried = shell.arg(retry).output().unwrap();
+    assert!(
+        retried.status.success(),
+        "{}",
+        String::from_utf8_lossy(&retried.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&retried.stdout).unwrap();
+    assert_eq!(v["warnings"][0]["code"], "csv_parse_errors");
+    let verbose = run(&["--strict", "--verbose", "--json", csv.to_str().unwrap()]);
+    assert_eq!(verbose.status.code(), Some(1));
+    assert!(verbose.stdout.is_empty());
+    let detail = String::from_utf8_lossy(&verbose.stderr);
+    assert!(detail.contains("Expected: whole numbers"));
+    assert!(detail.contains("Technical details:") && detail.contains("dtype `i64`"));
+
+    let excel = dir.path().join("errors.xlsx");
+    error_workbook(&excel);
+    let out = run(&["--strict", excel.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("Cell: A3 (#DIV/0!)"), "{err}");
+    assert!(err.contains("Fix the cell in Excel"), "{err}");
+    assert!(!err.contains("included in missingness"), "{err}");
+}
+
+#[test]
+fn excel_errors_show_absolute_cell_addresses_for_offset_tables() {
+    use rust_xlsxwriter::{Formula, Workbook};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("offset.xlsx");
+    let mut workbook = Workbook::new();
+    let sheet = workbook.add_worksheet();
+    sheet.write_string(9, 29, "amount").unwrap(); // AD10
+    sheet.write_number(10, 29, 42).unwrap();
+    sheet
+        .write_formula(11, 29, Formula::new("=1/0").set_result("#DIV/0!"))
+        .unwrap();
+    workbook.save(&path).unwrap();
+    let out = run(&["--strict", path.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Cell: AD12 (#DIV/0!)"));
+}
