@@ -4,7 +4,8 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use datapeek::display::render_table;
-use datapeek::profile::profile_path;
+use datapeek::profile::{profile_path, ProfileOptions};
+use datapeek::RowSelect;
 
 /// Instant data-file profiler.
 ///
@@ -16,7 +17,7 @@ use datapeek::profile::profile_path;
     version,
     about = "Instant data-file profiler",
     long_about = None,
-    after_help = "Formats: CSV/TSV (delimiter auto-detected), Parquet, JSON Lines"
+    after_help = "Formats: CSV/TSV (delimiter auto-detected), Parquet, JSON Lines, Excel (.xlsx, .xlsm, .xls, .xlsb)\n\n--sample draws a uniform random sample of N rows from the whole file.\n--head reads the first N rows and stops. The two flags cannot be combined.\nOn an Excel file, --sheet accepts a sheet name or a 0-based index. A value\nthat matches a sheet name exactly wins, even when the name is numeric."
 )]
 struct Cli {
     /// Data file to profile
@@ -30,9 +31,21 @@ struct Cli {
     #[arg(short, long, value_delimiter = ',', value_name = "COLS")]
     columns: Option<Vec<String>>,
 
-    /// Profile only the first N rows
-    #[arg(long, value_name = "N")]
+    /// Uniform random sample of N rows from the whole file
+    #[arg(long, value_name = "N", conflicts_with = "head")]
     sample: Option<usize>,
+
+    /// Profile the first N rows and stop scanning
+    #[arg(long, value_name = "N", conflicts_with = "sample")]
+    head: Option<usize>,
+
+    /// RNG seed for --sample. The same seed profiles the same rows
+    #[arg(long, value_name = "SEED", requires = "sample")]
+    seed: Option<u64>,
+
+    /// Excel sheet name, or a 0-based index when no sheet has that exact name
+    #[arg(long, value_name = "NAME|INDEX")]
+    sheet: Option<String>,
 }
 
 fn main() -> ExitCode {
@@ -47,8 +60,18 @@ fn main() -> ExitCode {
 
 fn run() -> datapeek::Result<()> {
     let cli = Cli::parse();
-    let columns = cli.columns.as_deref();
-    let profile = profile_path(&cli.file, columns, cli.sample)?;
+    let rows = match (cli.sample, cli.head) {
+        (Some(n), None) => RowSelect::Sample { n, seed: cli.seed },
+        (None, Some(n)) => RowSelect::Head(n),
+        (None, None) => RowSelect::All,
+        (Some(_), Some(_)) => unreachable!("clap rejects --sample with --head"),
+    };
+    let opts = ProfileOptions {
+        columns: cli.columns.as_deref(),
+        rows,
+        sheet: cli.sheet.as_deref(),
+    };
+    let profile = profile_path(&cli.file, &opts)?;
 
     if cli.json {
         write_stdout(&profile.to_json()?)?;

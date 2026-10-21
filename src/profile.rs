@@ -4,7 +4,7 @@ use polars::prelude::*;
 use serde::Serialize;
 
 use crate::error::Result;
-use crate::load::{self, FileKind};
+use crate::load::{self, ReadMode, RowSelect};
 use crate::sparkline::{self, BINS};
 
 const TOP_N: usize = 3;
@@ -89,11 +89,37 @@ pub struct FileProfile {
     pub file: String,
     pub rows: usize,
     pub columns: usize,
+    /// True when the profile covers a strict subset of the file.
     pub sampled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sample_limit: Option<usize>,
+    /// `full`, `head`, or `random`.
+    pub mode: ReadMode,
+    /// Seed passed to `--sample`, or null when sampling was unseeded or not used.
+    pub seed: Option<u64>,
     pub format: String,
+    /// Excel sheet that was profiled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sheet: Option<String>,
     pub profile: Vec<ColumnProfile>,
+}
+
+/// What to profile. The default is the whole file and, for Excel, the first sheet.
+#[derive(Debug, Clone, Copy)]
+pub struct ProfileOptions<'a> {
+    pub columns: Option<&'a [String]>,
+    pub rows: RowSelect,
+    pub sheet: Option<&'a str>,
+}
+
+impl Default for ProfileOptions<'static> {
+    fn default() -> Self {
+        Self {
+            columns: None,
+            rows: RowSelect::All,
+            sheet: None,
+        }
+    }
 }
 
 impl FileProfile {
@@ -103,43 +129,29 @@ impl FileProfile {
 }
 
 /// Profile a data file at `path`.
-pub fn profile_path(
-    path: &Path,
-    columns: Option<&[String]>,
-    sample: Option<usize>,
-) -> Result<FileProfile> {
-    let loaded = load::load(path, columns, sample)?;
-    Ok(profile_loaded(path, loaded.df, loaded.kind, sample))
+pub fn profile_path(path: &Path, opts: &ProfileOptions<'_>) -> Result<FileProfile> {
+    let loaded = load::load(path, opts.columns, opts.rows, opts.sheet)?;
+    Ok(profile_loaded(path, loaded))
 }
 
-pub fn profile_loaded(
-    path: &Path,
-    df: DataFrame,
-    kind: FileKind,
-    sample: Option<usize>,
-) -> FileProfile {
-    let rows = df.height();
-    let mut profile = Vec::with_capacity(df.width());
-    for col in df.get_columns() {
+pub fn profile_loaded(path: &Path, loaded: load::Loaded) -> FileProfile {
+    let rows = loaded.df.height();
+    let mut profile = Vec::with_capacity(loaded.df.width());
+    for col in loaded.df.get_columns() {
         profile.push(profile_column(col, rows));
     }
+    let outcome = loaded.outcome;
     FileProfile {
         file: path.display().to_string(),
         rows,
-        columns: df.width(),
-        sampled: sample.is_some(),
-        sample_limit: sample,
-        format: format_label(kind),
+        columns: loaded.df.width(),
+        sampled: outcome.mode != ReadMode::Full,
+        sample_limit: outcome.limit,
+        mode: outcome.mode,
+        seed: outcome.seed,
+        format: load::format_name(loaded.kind),
+        sheet: loaded.sheet,
         profile,
-    }
-}
-
-fn format_label(kind: FileKind) -> String {
-    match kind {
-        FileKind::Csv { sep: b'\t' } => "tsv".into(),
-        FileKind::Csv { .. } => "csv".into(),
-        FileKind::Parquet => "parquet".into(),
-        FileKind::Jsonl => "jsonl".into(),
     }
 }
 
@@ -550,7 +562,7 @@ mod tests {
             "id,amount,name\n1001,4.5,Acme\n1002,5.5,Acme\n1024,249,Umbrella\n1003,6,Acme\n1004,7,Acme\n",
         )
         .unwrap();
-        let profile = profile_path(&csv, None, None).unwrap();
+        let profile = profile_path(&csv, &ProfileOptions::default()).unwrap();
         let id = &profile.profile[0];
         assert_eq!(id.min.as_ref().unwrap().to_display(), "1,001");
         assert_eq!(id.max.as_ref().unwrap().to_display(), "1,024");
@@ -580,18 +592,97 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let csv = dir.path().join("t.csv");
         std::fs::write(&csv, "id,amount\n1,2.5\n2,3.5\n3,2.5\n").unwrap();
-        let loaded = crate::load::load(&csv, None, None).unwrap();
+        let loaded = crate::load::load(&csv, None, RowSelect::All, None).unwrap();
         let mut df = loaded.df;
         let pq = dir.path().join("t.parquet");
         {
             let mut f = std::fs::File::create(&pq).unwrap();
             ParquetWriter::new(&mut f).finish(&mut df).unwrap();
         }
-        let p = crate::profile_path(&pq, None, None).unwrap();
+        let p = crate::profile_path(&pq, &ProfileOptions::default()).unwrap();
         assert_eq!(p.format, "parquet");
         assert_eq!(p.rows, 3);
         assert_eq!(p.columns, 2);
         assert_eq!(p.profile[0].dtype, InferredType::Integer);
         assert_eq!(p.profile[1].dtype, InferredType::Decimal);
+    }
+
+    #[test]
+    fn parquet_and_jsonl_samples_match_their_seeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut body = String::new();
+        for i in 0..300 {
+            body.push_str(&format!("{{\"n\":{i}}}\n"));
+        }
+        let jsonl = dir.path().join("n.jsonl");
+        std::fs::write(&jsonl, &body).unwrap();
+
+        let sample = ProfileOptions {
+            columns: None,
+            rows: RowSelect::Sample {
+                n: 20,
+                seed: Some(4),
+            },
+            sheet: None,
+        };
+        let a = profile_path(&jsonl, &sample).unwrap();
+        let b = profile_path(&jsonl, &sample).unwrap();
+        assert_eq!(a.mode, ReadMode::Random);
+        assert_eq!(a.seed, Some(4));
+        assert_eq!(a.rows, 20);
+        assert_eq!(a.to_json().unwrap(), b.to_json().unwrap());
+        let head = profile_path(
+            &jsonl,
+            &ProfileOptions {
+                columns: None,
+                rows: RowSelect::Head(20),
+                sheet: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(head.mode, ReadMode::Head);
+        assert_eq!(head.profile[0].min, Some(StatValue::Integer(0)));
+        assert_eq!(head.profile[0].max, Some(StatValue::Integer(19)));
+        assert_ne!(a.profile[0].max, head.profile[0].max);
+
+        let csv = dir.path().join("n.csv");
+        let mut csv_body = String::from("n\n");
+        for i in 0..300 {
+            csv_body.push_str(&format!("{i}\n"));
+        }
+        std::fs::write(&csv, csv_body).unwrap();
+        let loaded = crate::load::load(&csv, None, RowSelect::All, None).unwrap();
+        let mut frame = loaded.df;
+        let pq = dir.path().join("n.parquet");
+        {
+            let mut file = std::fs::File::create(&pq).unwrap();
+            ParquetWriter::new(&mut file).finish(&mut frame).unwrap();
+        }
+        let cols = ["n".to_string()];
+        let projected = ProfileOptions {
+            columns: Some(&cols),
+            rows: RowSelect::Sample {
+                n: 15,
+                seed: Some(8),
+            },
+            sheet: None,
+        };
+        let once = profile_path(&pq, &projected).unwrap();
+        let twice = profile_path(&pq, &projected).unwrap();
+        assert_eq!(once.format, "parquet");
+        assert_eq!(once.rows, 15);
+        assert_eq!(once.columns, 1);
+        assert_eq!(once.to_json().unwrap(), twice.to_json().unwrap());
+        let head = profile_path(
+            &pq,
+            &ProfileOptions {
+                columns: Some(&cols),
+                rows: RowSelect::Head(15),
+                sheet: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(head.profile[0].max, Some(StatValue::Integer(14)));
+        assert_ne!(once.profile[0].max, head.profile[0].max);
     }
 }

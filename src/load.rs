@@ -1,10 +1,14 @@
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use polars::prelude::*;
+use rand::Rng;
+use serde::Serialize;
 
 use crate::error::{Error, Result};
+use crate::excel;
+use crate::sample;
 
 /// How we will parse a file, after looking at the extension and a small sniff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,18 +16,106 @@ pub enum FileKind {
     Csv { sep: u8 },
     Parquet,
     Jsonl,
+    Excel(ExcelKind),
+}
+
+/// Workbook extensions calamine opens directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExcelKind {
+    Xlsx,
+    Xlsm,
+    Xls,
+    Xlsb,
+}
+
+impl ExcelKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Xlsx => "xlsx",
+            Self::Xlsm => "xlsm",
+            Self::Xls => "xls",
+            Self::Xlsb => "xlsb",
+        }
+    }
+}
+
+/// Which rows to profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowSelect {
+    /// Every row.
+    All,
+    /// The first N rows. Scanning stops once those rows are in hand.
+    Head(usize),
+    /// A uniform sample of N rows from the whole file.
+    Sample { n: usize, seed: Option<u64> },
+}
+
+/// How the loaded frame relates to the file, for the header line and JSON.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReadMode {
+    Full,
+    Head,
+    Random,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadOutcome {
+    pub mode: ReadMode,
+    pub seed: Option<u64>,
+    pub limit: Option<usize>,
+}
+
+impl ReadOutcome {
+    pub fn full() -> Self {
+        Self {
+            mode: ReadMode::Full,
+            seed: None,
+            limit: None,
+        }
+    }
+
+    pub fn head(n: usize) -> Self {
+        Self {
+            mode: ReadMode::Head,
+            seed: None,
+            limit: Some(n),
+        }
+    }
+
+    pub fn random(n: usize, seed: Option<u64>) -> Self {
+        Self {
+            mode: ReadMode::Random,
+            seed,
+            limit: Some(n),
+        }
+    }
 }
 
 pub struct Loaded {
     pub df: DataFrame,
     pub kind: FileKind,
+    pub outcome: ReadOutcome,
+    pub sheet: Option<String>,
 }
 
 /// Load a tabular file into a DataFrame.
 ///
-/// `sample` takes the first N rows (cheap for delimited and Parquet scans).
-/// Column filtering happens after the schema is known so missing names error clearly.
-pub fn load(path: &Path, columns: Option<&[String]>, sample: Option<usize>) -> Result<Loaded> {
+/// `--head` stops after N rows. `--sample` draws a uniform sample: delimited
+/// and JSON Lines files use a streaming reservoir, Parquet reads only the row
+/// groups that contain the chosen row indexes (and only the requested
+/// columns), and Excel picks row indexes out of the sheet calamine already
+/// parsed. When N is at least the row count, the whole file is loaded the
+/// same way as an unsampled profile.
+pub fn load(
+    path: &Path,
+    columns: Option<&[String]>,
+    rows: RowSelect,
+    sheet: Option<&str>,
+) -> Result<Loaded> {
+    if matches!(rows, RowSelect::Head(0) | RowSelect::Sample { n: 0, .. }) {
+        return Err(Error::new("row limit must be at least 1"));
+    }
     if !path.exists() {
         return Err(Error::new(format!("no such file: {}", path.display())));
     }
@@ -36,10 +128,31 @@ pub fn load(path: &Path, columns: Option<&[String]>, sample: Option<usize>) -> R
     }
 
     let kind = sniff_kind(path)?;
-    let df = match kind {
-        FileKind::Csv { sep } => load_csv(path, sep, sample).map_err(|e| wrap_parse(path, e))?,
-        FileKind::Parquet => load_parquet(path, sample).map_err(|e| wrap_parse(path, e))?,
-        FileKind::Jsonl => load_jsonl(path, sample).map_err(|e| wrap_parse(path, e))?,
+    if sheet.is_some() && !matches!(kind, FileKind::Excel(_)) {
+        return Err(Error::new(format!(
+            "--sheet only applies to Excel files (.xlsx, .xlsm, .xls, .xlsb); '{}' is {}",
+            path.display(),
+            format_name(kind)
+        )));
+    }
+
+    let (df, outcome, sheet_name) = match kind {
+        FileKind::Csv { sep } => {
+            let (df, outcome) = load_csv(path, sep, rows)?;
+            (df, outcome, None)
+        }
+        FileKind::Parquet => {
+            let (df, outcome) = load_parquet(path, columns, rows)?;
+            (df, outcome, None)
+        }
+        FileKind::Jsonl => {
+            let (df, outcome) = load_jsonl(path, rows)?;
+            (df, outcome, None)
+        }
+        FileKind::Excel(_) => {
+            let (df, outcome, name) = excel::load_excel(path, rows, sheet)?;
+            (df, outcome, Some(name))
+        }
     };
 
     if df.width() == 0 {
@@ -50,10 +163,25 @@ pub fn load(path: &Path, columns: Option<&[String]>, sample: Option<usize>) -> R
     }
 
     let df = select_columns(df, columns)?;
-    Ok(Loaded { df, kind })
+    Ok(Loaded {
+        df,
+        kind,
+        outcome,
+        sheet: sheet_name,
+    })
 }
 
-fn wrap_parse(path: &Path, err: polars::prelude::PolarsError) -> Error {
+pub fn format_name(kind: FileKind) -> String {
+    match kind {
+        FileKind::Csv { sep: b'\t' } => "tsv".into(),
+        FileKind::Csv { .. } => "csv".into(),
+        FileKind::Parquet => "parquet".into(),
+        FileKind::Jsonl => "jsonl".into(),
+        FileKind::Excel(kind) => kind.as_str().into(),
+    }
+}
+
+fn wrap_parse(path: &Path, err: impl std::fmt::Display) -> Error {
     Error::parse(path, err)
 }
 
@@ -72,10 +200,14 @@ pub fn sniff_kind(path: &Path) -> Result<FileKind> {
             Ok(FileKind::Csv { sep })
         }
         "jsonl" | "ndjson" | "json" => Ok(FileKind::Jsonl),
-        "xlsx" | "xlsm" | "xls" | "ods" | "xlsb" => Err(Error::new(format!(
-            "Excel files are not supported in v1: {}",
-            path.display()
-        ))),
+        "xlsx" => Ok(FileKind::Excel(ExcelKind::Xlsx)),
+        "xlsm" => Ok(FileKind::Excel(ExcelKind::Xlsm)),
+        "xls" => Ok(FileKind::Excel(ExcelKind::Xls)),
+        "xlsb" => Ok(FileKind::Excel(ExcelKind::Xlsb)),
+        "ods" => Err(Error::unsupported(
+            path,
+            "OpenDocument spreadsheets are not supported",
+        )),
         _ => sniff_content(path),
     }
 }
@@ -162,33 +294,367 @@ fn split_count(line: &str, sep: u8) -> usize {
     n
 }
 
-fn load_csv(path: &Path, sep: u8, sample: Option<usize>) -> PolarsResult<DataFrame> {
+fn load_csv(path: &Path, sep: u8, rows: RowSelect) -> Result<(DataFrame, ReadOutcome)> {
+    match rows {
+        RowSelect::All => {
+            let df = read_csv(path, sep, None)?;
+            Ok((df, ReadOutcome::full()))
+        }
+        RowSelect::Head(n) => {
+            // One extra row tells us whether the file is longer than N
+            // without scanning the rest.
+            let df = read_csv(path, sep, Some(n + 1))?;
+            Ok(trim_head(df, n))
+        }
+        RowSelect::Sample { n, seed } => sample_csv(path, sep, n, seed),
+    }
+}
+
+fn read_csv(path: &Path, sep: u8, n_rows: Option<usize>) -> Result<DataFrame> {
     let mut reader = LazyCsvReader::new(path)
         .with_has_header(true)
         .with_separator(sep)
         .with_infer_schema_length(Some(10_000))
         .with_try_parse_dates(true)
         .with_ignore_errors(true);
-    if let Some(n) = sample {
+    if let Some(n) = n_rows {
         reader = reader.with_n_rows(Some(n));
     }
-    reader.finish()?.collect()
+    reader
+        .finish()
+        .and_then(|lf| lf.collect())
+        .map_err(|err| wrap_parse(path, err))
 }
 
-fn load_parquet(path: &Path, sample: Option<usize>) -> PolarsResult<DataFrame> {
-    let args = ScanArgsParquet {
-        n_rows: sample,
-        ..Default::default()
-    };
-    LazyFrame::scan_parquet(path, args)?.collect()
-}
+fn sample_csv(
+    path: &Path,
+    sep: u8,
+    n: usize,
+    seed: Option<u64>,
+) -> Result<(DataFrame, ReadOutcome)> {
+    let mut reader = csv::ReaderBuilder::new()
+        .delimiter(sep)
+        .has_headers(true)
+        .flexible(false)
+        .from_path(path)
+        .map_err(|err| Error::io(path, err))?;
+    let header = reader
+        .byte_headers()
+        .map_err(|err| wrap_parse(path, err))?
+        .clone();
 
-fn load_jsonl(path: &Path, sample: Option<usize>) -> PolarsResult<DataFrame> {
-    let mut df = LazyJsonLineReader::new(path).finish()?.collect()?;
-    if let Some(n) = sample {
-        df = df.slice(0, n);
+    let mut reservoir: Vec<(usize, csv::ByteRecord)> = Vec::with_capacity(n.min(65_536));
+    let mut rng = sample::rng(seed);
+    let mut total = 0usize;
+    let mut record = csv::ByteRecord::new();
+    loop {
+        let more = reader
+            .read_byte_record(&mut record)
+            .map_err(|err| wrap_parse(path, err))?;
+        if !more {
+            break;
+        }
+        if total < n {
+            reservoir.push((total, record.clone()));
+        } else {
+            let j = rng.gen_range(0..=total);
+            if j < n {
+                reservoir[j] = (total, record.clone());
+            }
+        }
+        total += 1;
     }
-    Ok(df)
+
+    if total <= n {
+        // Same loader as an unsampled profile, so types match exactly.
+        let df = read_csv(path, sep, None)?;
+        return Ok((df, ReadOutcome::full()));
+    }
+
+    reservoir.sort_unstable_by_key(|(idx, _)| *idx);
+    let mut buf = Vec::new();
+    {
+        let mut writer = csv::WriterBuilder::new()
+            .delimiter(sep)
+            .from_writer(&mut buf);
+        writer
+            .write_byte_record(&header)
+            .map_err(|err| wrap_parse(path, err))?;
+        for (_, row) in &reservoir {
+            writer
+                .write_byte_record(row)
+                .map_err(|err| wrap_parse(path, err))?;
+        }
+        writer.flush().map_err(|err| wrap_parse(path, err))?;
+    }
+
+    let df = CsvReadOptions::default()
+        .with_has_header(true)
+        .with_infer_schema_length(Some(10_000))
+        .with_ignore_errors(true)
+        .with_raise_if_empty(false)
+        .map_parse_options(|opts| opts.with_separator(sep).with_try_parse_dates(true))
+        .into_reader_with_file_handle(Cursor::new(buf))
+        .finish()
+        .map_err(|err| wrap_parse(path, err))?;
+    Ok((df, ReadOutcome::random(n, seed)))
+}
+
+fn load_parquet(
+    path: &Path,
+    columns: Option<&[String]>,
+    rows: RowSelect,
+) -> Result<(DataFrame, ReadOutcome)> {
+    match rows {
+        RowSelect::All => {
+            let df = scan_parquet(path, None, None)?;
+            Ok((df, ReadOutcome::full()))
+        }
+        RowSelect::Head(n) => {
+            let df = scan_parquet(path, None, Some(n + 1))?;
+            Ok(trim_head(df, n))
+        }
+        RowSelect::Sample { n, seed } => sample_parquet(path, columns, n, seed),
+    }
+}
+
+fn scan_parquet(
+    path: &Path,
+    columns: Option<&[String]>,
+    n_rows: Option<usize>,
+) -> Result<DataFrame> {
+    // The full-file path stays a lazy scan with no column projection pushed
+    // down, matching v0.1. Sampling projects columns before the read.
+    if columns.is_none() {
+        let args = ScanArgsParquet {
+            n_rows,
+            ..Default::default()
+        };
+        return LazyFrame::scan_parquet(path, args)
+            .and_then(|lf| lf.collect())
+            .map_err(|err| wrap_parse(path, err));
+    }
+
+    let file = File::open(path).map_err(|err| Error::io(path, err))?;
+    let mut reader = ParquetReader::new(file);
+    if let Some(n) = n_rows {
+        reader = reader.with_slice(Some((0, n)));
+    }
+    if let Some(cols) = columns {
+        reader = reader.with_columns(Some(cols.to_vec()));
+    }
+    reader.finish().map_err(|err| wrap_parse(path, err))
+}
+
+fn sample_parquet(
+    path: &Path,
+    columns: Option<&[String]>,
+    n: usize,
+    seed: Option<u64>,
+) -> Result<(DataFrame, ReadOutcome)> {
+    let (total, spans) = parquet_layout(path)?;
+    if n >= total {
+        let df = scan_parquet(path, columns, None)?;
+        return Ok((df, ReadOutcome::full()));
+    }
+    if let Some(wanted) = columns {
+        let names = parquet_column_names(path)?;
+        validate_columns(&names, wanted)?;
+    }
+
+    let indices = sample::sample_indices(total, n, seed);
+    let mut parts = Vec::new();
+    let mut cursor = 0usize;
+    for (start, len) in spans {
+        if len == 0 {
+            continue;
+        }
+        let end = start + len;
+        let mut local = Vec::new();
+        while cursor < indices.len() && indices[cursor] < end {
+            if indices[cursor] >= start {
+                local.push(indices[cursor] - start);
+            }
+            cursor += 1;
+        }
+        if local.is_empty() {
+            continue;
+        }
+        let file = File::open(path).map_err(|err| Error::io(path, err))?;
+        let mut reader = ParquetReader::new(file).with_slice(Some((start, len)));
+        if let Some(cols) = columns {
+            reader = reader.with_columns(Some(cols.to_vec()));
+        }
+        let group = reader.finish().map_err(|err| wrap_parse(path, err))?;
+        let taken = take_rows(&group, &local).map_err(|err| wrap_parse(path, err))?;
+        parts.push(taken);
+    }
+    if cursor != indices.len() {
+        return Err(Error::new(format!(
+            "failed to parse '{}': parquet row groups do not cover every row",
+            path.display()
+        )));
+    }
+    let df = vstack_all(parts).map_err(|err| wrap_parse(path, err))?;
+    Ok((df, ReadOutcome::random(n, seed)))
+}
+
+fn parquet_layout(path: &Path) -> Result<(usize, Vec<(usize, usize)>)> {
+    let file = File::open(path).map_err(|err| Error::io(path, err))?;
+    let mut reader = ParquetReader::new(file);
+    let metadata = reader
+        .get_metadata()
+        .map_err(|err| wrap_parse(path, err))?
+        .clone();
+    let mut spans = Vec::with_capacity(metadata.row_groups.len());
+    let mut start = 0usize;
+    for group in &metadata.row_groups {
+        let len = group.num_rows();
+        spans.push((start, len));
+        start += len;
+    }
+    if start != metadata.num_rows {
+        return Err(Error::new(format!(
+            "failed to parse '{}': parquet row count does not match its row groups",
+            path.display()
+        )));
+    }
+    Ok((metadata.num_rows, spans))
+}
+
+fn parquet_column_names(path: &Path) -> Result<Vec<String>> {
+    let mut lf = LazyFrame::scan_parquet(
+        path,
+        ScanArgsParquet {
+            ..Default::default()
+        },
+    )
+    .map_err(|err| wrap_parse(path, err))?;
+    let schema = lf.collect_schema().map_err(|err| wrap_parse(path, err))?;
+    Ok(schema.iter_names().map(|name| name.to_string()).collect())
+}
+
+fn take_rows(df: &DataFrame, indices: &[usize]) -> PolarsResult<DataFrame> {
+    let values: Vec<u64> = indices.iter().copied().map(|idx| idx as u64).collect();
+    let series = Series::new("idx".into(), values).cast(&IDX_DTYPE)?;
+    df.take(series.idx()?)
+}
+
+fn vstack_all(parts: Vec<DataFrame>) -> PolarsResult<DataFrame> {
+    let mut parts = parts.into_iter();
+    let Some(mut acc) = parts.next() else {
+        polars_bail!(ComputeError: "sample selected no rows");
+    };
+    for df in parts {
+        acc.vstack_mut(&df)?;
+    }
+    Ok(acc)
+}
+
+fn load_jsonl(path: &Path, rows: RowSelect) -> Result<(DataFrame, ReadOutcome)> {
+    match rows {
+        RowSelect::All => {
+            let df = LazyJsonLineReader::new(path)
+                .finish()
+                .and_then(|lf| lf.collect())
+                .map_err(|err| wrap_parse(path, err))?;
+            Ok((df, ReadOutcome::full()))
+        }
+        RowSelect::Head(n) => {
+            let prefix = read_line_prefix(path, n + 1)?;
+            if prefix.len() <= n {
+                let df = LazyJsonLineReader::new(path)
+                    .finish()
+                    .and_then(|lf| lf.collect())
+                    .map_err(|err| wrap_parse(path, err))?;
+                Ok((df, ReadOutcome::full()))
+            } else {
+                let df = dataframe_from_jsonl(path, &prefix[..n])?;
+                Ok((df, ReadOutcome::head(n)))
+            }
+        }
+        RowSelect::Sample { n, seed } => sample_jsonl(path, n, seed),
+    }
+}
+
+fn sample_jsonl(path: &Path, n: usize, seed: Option<u64>) -> Result<(DataFrame, ReadOutcome)> {
+    let file = File::open(path).map_err(|err| Error::io(path, err))?;
+    let reader = BufReader::new(file);
+    let mut reservoir: Vec<(usize, String)> = Vec::with_capacity(n.min(65_536));
+    let mut rng = sample::rng(seed);
+    let mut total = 0usize;
+    for line in reader.lines() {
+        let mut line = line.map_err(|err| Error::io(path, err))?;
+        if line.ends_with('\r') {
+            line.pop();
+        }
+        if total < n {
+            reservoir.push((total, line));
+        } else {
+            let j = rng.gen_range(0..=total);
+            if j < n {
+                reservoir[j] = (total, line);
+            }
+        }
+        total += 1;
+    }
+    if total <= n {
+        let df = LazyJsonLineReader::new(path)
+            .finish()
+            .and_then(|lf| lf.collect())
+            .map_err(|err| wrap_parse(path, err))?;
+        return Ok((df, ReadOutcome::full()));
+    }
+    reservoir.sort_unstable_by_key(|(idx, _)| *idx);
+    let lines: Vec<String> = reservoir.into_iter().map(|(_, line)| line).collect();
+    let df = dataframe_from_jsonl(path, &lines)?;
+    Ok((df, ReadOutcome::random(n, seed)))
+}
+
+fn read_line_prefix(path: &Path, max_lines: usize) -> Result<Vec<String>> {
+    let file = File::open(path).map_err(|err| Error::io(path, err))?;
+    let reader = BufReader::new(file);
+    let mut lines = Vec::new();
+    for line in reader.lines() {
+        let mut line = line.map_err(|err| Error::io(path, err))?;
+        if line.ends_with('\r') {
+            line.pop();
+        }
+        lines.push(line);
+        if lines.len() >= max_lines {
+            break;
+        }
+    }
+    Ok(lines)
+}
+
+fn dataframe_from_jsonl(path: &Path, lines: &[String]) -> Result<DataFrame> {
+    let mut text = lines.join("\n");
+    text.push('\n');
+    JsonReader::new(Cursor::new(text.into_bytes()))
+        .with_json_format(JsonFormat::JsonLines)
+        .finish()
+        .map_err(|err| wrap_parse(path, err))
+}
+
+fn trim_head(df: DataFrame, n: usize) -> (DataFrame, ReadOutcome) {
+    if df.height() > n {
+        (df.slice(0, n), ReadOutcome::head(n))
+    } else {
+        (df, ReadOutcome::full())
+    }
+}
+
+fn validate_columns(available: &[String], wanted: &[String]) -> Result<()> {
+    for name in wanted {
+        if !available.iter().any(|have| have == name) {
+            return Err(Error::new(format!(
+                "unknown column '{name}' (have: {})",
+                available.join(", ")
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn select_columns(df: DataFrame, columns: Option<&[String]>) -> Result<DataFrame> {
@@ -203,14 +669,7 @@ fn select_columns(df: DataFrame, columns: Option<&[String]>) -> Result<DataFrame
         .iter()
         .map(|s| s.to_string())
         .collect();
-    for name in wanted {
-        if !available.iter().any(|a| a == name) {
-            return Err(Error::new(format!(
-                "unknown column '{name}' (have: {})",
-                available.join(", ")
-            )));
-        }
-    }
+    validate_columns(&available, wanted)?;
     df.select(wanted)
         .map_err(|e| Error::new(format!("could not select columns: {e}")))
 }
@@ -247,5 +706,41 @@ mod tests {
     fn quoted_commas_do_not_break_csv() {
         let sample = b"name,city\n\"Smith, Jane\",Boston\n\"Lee, Ann\",Austin\n";
         assert_eq!(detect_delimiter(sample), b',');
+    }
+
+    #[test]
+    fn sniffs_excel_extensions() {
+        assert_eq!(
+            sniff_kind(Path::new("book.xlsx")).unwrap(),
+            FileKind::Excel(ExcelKind::Xlsx)
+        );
+        assert_eq!(
+            sniff_kind(Path::new("book.XLSM")).unwrap(),
+            FileKind::Excel(ExcelKind::Xlsm)
+        );
+        assert_eq!(
+            sniff_kind(Path::new("book.xls")).unwrap(),
+            FileKind::Excel(ExcelKind::Xls)
+        );
+        assert_eq!(
+            sniff_kind(Path::new("book.xlsb")).unwrap(),
+            FileKind::Excel(ExcelKind::Xlsb)
+        );
+        let err = sniff_kind(Path::new("book.ods")).unwrap_err();
+        assert!(err.to_string().contains("OpenDocument"), "{err}");
+    }
+
+    #[test]
+    fn sheet_flag_rejected_for_csv() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv = dir.path().join("t.csv");
+        std::fs::write(&csv, "a,b\n1,2\n").unwrap();
+        let err = match load(&csv, None, RowSelect::All, Some("Sheet1")) {
+            Ok(_) => panic!("--sheet on a csv should fail"),
+            Err(err) => err,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("--sheet"), "{msg}");
+        assert!(msg.contains("Excel"), "{msg}");
     }
 }

@@ -27,7 +27,7 @@ impl Error {
 
     pub fn unsupported(path: &Path, detail: impl fmt::Display) -> Self {
         Self::new(format!(
-            "unsupported file '{}': {detail} (try CSV, TSV, Parquet, or JSON Lines)",
+            "unsupported file '{}': {detail} (try CSV, TSV, Parquet, JSON Lines, or Excel)",
             path.display()
         ))
     }

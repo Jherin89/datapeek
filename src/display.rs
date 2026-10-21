@@ -2,6 +2,7 @@ use std::io::IsTerminal;
 
 use colored::{ColoredString, Colorize};
 
+use crate::load::ReadMode;
 use crate::profile::{fmt_uint, ColumnProfile, FileProfile, InferredType, StatValue};
 
 /// Render a colored terminal table, one row per column.
@@ -138,26 +139,29 @@ impl DisplayRow {
 
 fn header(profile: &FileProfile) -> String {
     let file = profile.file.as_str().bold();
-    let shape = if profile.sampled {
-        let n = profile.sample_limit.unwrap_or(profile.rows);
-        format!(
-            "sampled first {} rows × {} columns",
-            fmt_uint(n as u64),
-            fmt_uint(profile.columns as u64)
-        )
-    } else {
-        format!(
-            "{} rows × {} columns",
-            fmt_uint(profile.rows as u64),
-            fmt_uint(profile.columns as u64)
-        )
-    };
     format!(
         "  {}  {}\n  {}",
         "datapeek".bold().cyan(),
         file,
-        shape.dimmed()
+        shape_line(profile).dimmed()
     )
+}
+
+fn shape_line(profile: &FileProfile) -> String {
+    let rows = fmt_uint(profile.rows as u64);
+    let cols = fmt_uint(profile.columns as u64);
+    let body = match profile.mode {
+        ReadMode::Full => format!("{rows} rows × {cols} columns"),
+        ReadMode::Head => format!("first {rows} rows × {cols} columns"),
+        ReadMode::Random => match profile.seed {
+            Some(seed) => format!("random sample of {rows} rows (seed {seed}) × {cols} columns"),
+            None => format!("random sample of {rows} rows × {cols} columns"),
+        },
+    };
+    match &profile.sheet {
+        Some(sheet) => format!("sheet {sheet} · {body}"),
+        None => body,
+    }
 }
 
 fn pad(s: &str, width: usize) -> String {
@@ -207,5 +211,54 @@ pub fn fmt_pct(p: f64) -> String {
         "100%".into()
     } else {
         format!("{p:.1}%")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::load::ReadMode;
+
+    fn bare(mode: ReadMode, seed: Option<u64>, sheet: Option<String>, rows: usize) -> FileProfile {
+        FileProfile {
+            file: "t.csv".into(),
+            rows,
+            columns: 7,
+            sampled: mode != ReadMode::Full,
+            sample_limit: if mode == ReadMode::Full {
+                None
+            } else {
+                Some(rows)
+            },
+            mode,
+            seed,
+            format: "csv".into(),
+            sheet,
+            profile: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn shape_lines_name_the_read_mode() {
+        let full = render_table(&bare(ReadMode::Full, None, None, 24));
+        assert!(full.contains("24 rows × 7 columns"), "{full}");
+        let head = render_table(&bare(ReadMode::Head, None, None, 100));
+        assert!(head.contains("first 100 rows × 7 columns"), "{head}");
+        let random = render_table(&bare(ReadMode::Random, Some(1), None, 100));
+        assert!(
+            random.contains("random sample of 100 rows (seed 1) × 7 columns"),
+            "{random}"
+        );
+        let unseeded = render_table(&bare(ReadMode::Random, None, None, 100));
+        assert!(
+            unseeded.contains("random sample of 100 rows × 7 columns"),
+            "{unseeded}"
+        );
+        assert!(!unseeded.contains("seed"), "{unseeded}");
+        let sheet = render_table(&bare(ReadMode::Full, None, Some("Orders".into()), 24));
+        assert!(
+            sheet.contains("sheet Orders · 24 rows × 7 columns"),
+            "{sheet}"
+        );
     }
 }
