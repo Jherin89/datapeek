@@ -1,0 +1,10 @@
+{"metric":"latency_ms","value":12.4,"ok":true,"region":"us-east"}
+{"metric":"latency_ms","value":18.1,"ok":true,"region":"us-east"}
+{"metric":"latency_ms","value":9.7,"ok":true,"region":"eu-west"}
+{"metric":"error_rate","value":0.02,"ok":true,"region":"us-east"}
+{"metric":"latency_ms","value":41.0,"ok":false,"region":"ap-south"}
+{"metric":"error_rate","value":0.11,"ok":false,"region":"ap-south"}
+{"metric":"latency_ms","value":14.2,"ok":true,"region":"eu-west"}
+{"metric":"throughput","value":1200,"ok":true,"region":"us-east"}
+{"metric":"throughput","value":860,"ok":true,"region":"eu-west"}
+{"metric":"latency_ms","value":13.0,"ok":true,"region":"us-east"}

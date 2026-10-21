@@ -1,0 +1,50 @@
+[package]
+name = "datapeek"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+authors = ["Jordan Herin"]
+license = "MIT"
+description = "Instant data-file profiler for CSV, TSV, and Parquet"
+readme = "README.md"
+repository = "https://github.com/Jherin89/datapeek"
+homepage = "https://github.com/Jherin89/datapeek"
+keywords = ["csv", "parquet", "dataframe", "cli", "profiler"]
+categories = ["command-line-utilities", "data-structures"]
+exclude = ["target", "*.csv.bak"]
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["alloc", "std"] }
+clap = { version = "4.5", features = ["derive"] }
+colored = "2.1"
+polars = { version = "0.46", default-features = false, features = [
+    "csv",
+    "dtype-date",
+    "dtype-datetime",
+    "json",
+    "lazy",
+    "parquet",
+    "strings",
+    "temporal",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Transitive pins so this crate still builds on rustc 1.85 (latest patches want 1.88+).
+encoding_rs = "=0.8.35"
+home = "=0.5.11"
+psm = "=0.1.21"
+uuid = { version = "=1.16.0", default-features = false }
+
+[dev-dependencies]
+serde_json = "1"
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
+[[bin]]
+name = "datapeek"
+path = "src/main.rs"

@@ -1,0 +1,13 @@
+event_id	user	ts	ok	score	country
+1	alice	2024-03-01T12:00:00	true	0.91	US
+2	bob	2024-03-01T12:01:14	true	0.44	UK
+3	carol	2024-03-01T12:02:03	false	0.12	DE
+4	alice	2024-03-01T12:04:41	true	0.88	US
+5	dave	2024-03-01T12:05:09	true	0.73	CA
+6	bob	2024-03-01T12:08:22	true	0.51	UK
+7	erin	2024-03-01T12:09:00	false		FR
+8	alice	2024-03-01T12:11:18	true	0.95	US
+9	carol	2024-03-01T12:12:47	true	0.33	DE
+10	frank	2024-03-01T12:15:02	true	0.67	AU
+11	bob	2024-03-01T12:16:30	false	0.08	UK
+12	alice	2024-03-01T12:18:11	true	0.90	US

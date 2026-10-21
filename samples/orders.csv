@@ -1,0 +1,25 @@
+order_id,customer,sku,amount,order_date,shipped,note
+1001,Acme,WIDGET-1,19.99,2024-01-15,true,
+1002,Globex,WIDGET-2,249.00,2024-01-16,false,rush
+1003,Initech,GADGET-9,,2024-01-16,true,
+1004,Acme,WIDGET-1,19.99,2024-01-17,true,
+1005,Umbrella,WIDGET-7,9.99,2024-01-17,true,gift wrap
+1006,Globex,GADGET-9,89.50,2024-01-18,true,
+1007,Initech,WIDGET-2,249.00,2024-01-18,false,hold
+1008,Acme,WIDGET-1,19.99,2024-01-19,true,
+1009,Hooli,WIDGET-3,4.50,2024-01-19,true,
+1010,Acme,WIDGET-1,19.99,2024-01-20,true,
+1011,Globex,WIDGET-2,,2024-01-20,false,
+1012,Soylent,GADGET-2,129.00,2024-01-21,true,wait
+1013,Initech,WIDGET-1,19.99,2024-01-21,true,
+1014,Acme,WIDGET-7,9.99,2024-01-22,true,
+1015,Umbrella,GADGET-9,89.50,2024-01-22,false,rush
+1016,Hooli,WIDGET-3,4.50,2024-01-23,true,
+1017,Globex,WIDGET-1,19.99,2024-01-23,true,
+1018,Acme,WIDGET-2,249.00,2024-01-24,true,
+1019,Initech,WIDGET-1,19.99,2024-01-24,false,
+1020,Soylent,GADGET-2,129.00,2024-01-25,true,
+1021,Acme,WIDGET-1,19.99,2024-01-25,true,gift wrap
+1022,Hooli,WIDGET-3,4.50,2024-01-26,true,
+1023,Umbrella,WIDGET-7,9.99,2024-01-26,false,
+1024,Globex,GADGET-9,89.50,2024-01-27,true,
