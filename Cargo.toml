@@ -1,15 +1,15 @@
 [package]
 name = "datapeek"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.89"
 authors = ["Jordan Herin"]
 license = "MIT"
-description = "Instant data-file profiler for CSV, TSV, and Parquet"
+description = "Instant data-file profiler for CSV, TSV, Parquet, JSON Lines, and Excel"
 readme = "README.md"
 repository = "https://github.com/Jherin89/datapeek"
 homepage = "https://github.com/Jherin89/datapeek"
-keywords = ["csv", "parquet", "dataframe", "cli", "profiler"]
+keywords = ["csv", "parquet", "excel", "cli", "profiler"]
 categories = ["command-line-utilities", "data-structures"]
 exclude = ["target", "*.csv.bak"]
 

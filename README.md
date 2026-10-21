@@ -2,34 +2,37 @@
 
 **See what's in a data file before you load it.**
 
-Point datapeek at a CSV, TSV, Parquet, or JSON Lines file and get one row per
-column: inferred type, missingness, range, distinct count, top values, and a
-sparkline.
+Point datapeek at a CSV, TSV, Parquet, JSON Lines, or Excel file and get one
+row per column: inferred type, missingness, range, distinct count, top
+values, and a sparkline.
 
 [![CI](https://github.com/Jherin89/datapeek/actions/workflows/ci.yml/badge.svg)](https://github.com/Jherin89/datapeek/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Jherin89/datapeek)](https://github.com/Jherin89/datapeek/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-DEA584?logo=rust)](https://www.rust-lang.org)
+[![Rust 1.89+](https://img.shields.io/badge/rust-1.89%2B-DEA584?logo=rust)](https://www.rust-lang.org)
 
-![datapeek profiling samples/orders.csv](docs/screenshot.png)
+![datapeek profiling samples/orders.xlsx](docs/screenshot.png)
 
-![demo: a profile, --columns, and --json piped to jq](docs/demo.gif)
+![demo: a profile, --columns, an Excel sheet, a seeded sample, and --json piped to jq](docs/demo.gif)
 
 ## Features
 
 - A column profile in one command, with no notebook and no Python environment.
-- CSV, TSV, semicolon- and pipe-delimited text, Parquet, and JSON Lines.
+- CSV, TSV, semicolon- and pipe-delimited text, Parquet, JSON Lines, and Excel (`.xlsx`, `.xlsm`, `.xls`, `.xlsb`).
+- `--sheet` to pick an Excel sheet by name or by 0-based index.
 - A colored terminal table, plus `--json` for scripts.
-- `--columns` to focus a profile, and `--sample` to read only the first N rows.
+- `--columns` to focus a profile.
+- `--sample N` draws a uniform random sample of N rows from the whole file. `--seed` repeats that draw. `--head N` is the fast first-N scan.
 - Built on [Polars](https://pola.rs), so a few million rows stay practical on a laptop.
 - Prebuilt binaries for macOS (Apple Silicon and Intel), Linux x86_64, and Windows x86_64.
 
 ## Why datapeek
 
-A file shows up from a partner, a pipeline dump, or a Parquet landing in a
-bucket, and the question is small: what is in here? Types, holes, ranges, and
-whether a numeric column is a spike or a flat line. Opening a notebook to
-answer that costs more than the question.
+A file shows up from a partner, a pipeline dump, a Parquet landing in a
+bucket, or a workbook exported from a spreadsheet, and the question is
+small: what is in here? Types, holes, ranges, and whether a numeric column
+is a spike or a flat line. Opening a notebook to answer that costs more
+than the question.
 
 I wrote datapeek for that moment. It is a small Rust CLI that prints the
 shape of the file and gets out of the way. Use it before a warehouse load,
@@ -38,33 +41,33 @@ standing up pandas.
 
 ## Getting started
 
-v0.1.0 binaries are on the
-[GitHub release](https://github.com/Jherin89/datapeek/releases/tag/v0.1.0).
+v0.2.0 binaries are on the
+[GitHub release](https://github.com/Jherin89/datapeek/releases/tag/v0.2.0).
 Pick the archive that matches your machine. Each one unpacks to a directory
 of the same name, with the `datapeek` binary, `LICENSE`, and `README.md`.
 
 | Machine | Asset |
 | --- | --- |
-| macOS Apple Silicon | `datapeek-v0.1.0-aarch64-apple-darwin.tar.gz` |
-| macOS Intel | `datapeek-v0.1.0-x86_64-apple-darwin.tar.gz` |
-| Linux x86_64 | `datapeek-v0.1.0-x86_64-unknown-linux-gnu.tar.gz` |
-| Windows x86_64 | `datapeek-v0.1.0-x86_64-pc-windows-msvc.zip` |
+| macOS Apple Silicon | `datapeek-v0.2.0-aarch64-apple-darwin.tar.gz` |
+| macOS Intel | `datapeek-v0.2.0-x86_64-apple-darwin.tar.gz` |
+| Linux x86_64 | `datapeek-v0.2.0-x86_64-unknown-linux-gnu.tar.gz` |
+| Windows x86_64 | `datapeek-v0.2.0-x86_64-pc-windows-msvc.zip` |
 
-`datapeek --version` prints `datapeek 0.1.0`.
+`datapeek --version` prints `datapeek 0.2.0`.
 
 ### macOS (Apple Silicon)
 
 1. Download the Apple Silicon archive.
 
    ```bash
-   curl -fL -o datapeek-v0.1.0-aarch64-apple-darwin.tar.gz \
-     https://github.com/Jherin89/datapeek/releases/download/v0.1.0/datapeek-v0.1.0-aarch64-apple-darwin.tar.gz
+   curl -fL -o datapeek-v0.2.0-aarch64-apple-darwin.tar.gz \
+     https://github.com/Jherin89/datapeek/releases/download/v0.2.0/datapeek-v0.2.0-aarch64-apple-darwin.tar.gz
    ```
 
 2. Extract it.
 
    ```bash
-   tar -xzf datapeek-v0.1.0-aarch64-apple-darwin.tar.gz
+   tar -xzf datapeek-v0.2.0-aarch64-apple-darwin.tar.gz
    ```
 
 3. Clear the Gatekeeper quarantine attribute. macOS adds
@@ -74,7 +77,7 @@ of the same name, with the `datapeek` binary, `LICENSE`, and `README.md`.
    run:
 
    ```bash
-   xattr -d com.apple.quarantine datapeek-v0.1.0-aarch64-apple-darwin/datapeek
+   xattr -d com.apple.quarantine datapeek-v0.2.0-aarch64-apple-darwin/datapeek
    ```
 
    If `xattr` reports `No such xattr: com.apple.quarantine`, the file was not
@@ -82,13 +85,13 @@ of the same name, with the `datapeek` binary, `LICENSE`, and `README.md`.
    attribute on the whole folder:
 
    ```bash
-   xattr -dr com.apple.quarantine datapeek-v0.1.0-aarch64-apple-darwin
+   xattr -dr com.apple.quarantine datapeek-v0.2.0-aarch64-apple-darwin
    ```
 
 4. Put the binary on `PATH`. `/usr/local/bin` is already on the default PATH:
 
    ```bash
-   sudo install -m 755 datapeek-v0.1.0-aarch64-apple-darwin/datapeek /usr/local/bin/datapeek
+   sudo install -m 755 datapeek-v0.2.0-aarch64-apple-darwin/datapeek /usr/local/bin/datapeek
    ```
 
    Without `sudo`, install into a user directory and add it to `PATH` (zsh is
@@ -96,7 +99,7 @@ of the same name, with the `datapeek` binary, `LICENSE`, and `README.md`.
 
    ```bash
    mkdir -p "$HOME/.local/bin"
-   install -m 755 datapeek-v0.1.0-aarch64-apple-darwin/datapeek "$HOME/.local/bin/datapeek"
+   install -m 755 datapeek-v0.2.0-aarch64-apple-darwin/datapeek "$HOME/.local/bin/datapeek"
    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
    source "$HOME/.zshrc"
    ```
@@ -109,15 +112,15 @@ of the same name, with the `datapeek` binary, `LICENSE`, and `README.md`.
 
 ### macOS (Intel)
 
-Same steps, with the Intel archive `datapeek-v0.1.0-x86_64-apple-darwin.tar.gz`
-and the folder `datapeek-v0.1.0-x86_64-apple-darwin`.
+Same steps, with the Intel archive `datapeek-v0.2.0-x86_64-apple-darwin.tar.gz`
+and the folder `datapeek-v0.2.0-x86_64-apple-darwin`.
 
 ```bash
-curl -fL -o datapeek-v0.1.0-x86_64-apple-darwin.tar.gz \
-  https://github.com/Jherin89/datapeek/releases/download/v0.1.0/datapeek-v0.1.0-x86_64-apple-darwin.tar.gz
-tar -xzf datapeek-v0.1.0-x86_64-apple-darwin.tar.gz
-xattr -d com.apple.quarantine datapeek-v0.1.0-x86_64-apple-darwin/datapeek
-sudo install -m 755 datapeek-v0.1.0-x86_64-apple-darwin/datapeek /usr/local/bin/datapeek
+curl -fL -o datapeek-v0.2.0-x86_64-apple-darwin.tar.gz \
+  https://github.com/Jherin89/datapeek/releases/download/v0.2.0/datapeek-v0.2.0-x86_64-apple-darwin.tar.gz
+tar -xzf datapeek-v0.2.0-x86_64-apple-darwin.tar.gz
+xattr -d com.apple.quarantine datapeek-v0.2.0-x86_64-apple-darwin/datapeek
+sudo install -m 755 datapeek-v0.2.0-x86_64-apple-darwin/datapeek /usr/local/bin/datapeek
 datapeek --version
 ```
 
@@ -126,10 +129,10 @@ datapeek --version
 The Linux asset is a gzip-compressed tar. There is no quarantine attribute.
 
 ```bash
-curl -fL -o datapeek-v0.1.0-x86_64-unknown-linux-gnu.tar.gz \
-  https://github.com/Jherin89/datapeek/releases/download/v0.1.0/datapeek-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
-tar -xzf datapeek-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
-sudo install -m 755 datapeek-v0.1.0-x86_64-unknown-linux-gnu/datapeek /usr/local/bin/datapeek
+curl -fL -o datapeek-v0.2.0-x86_64-unknown-linux-gnu.tar.gz \
+  https://github.com/Jherin89/datapeek/releases/download/v0.2.0/datapeek-v0.2.0-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf datapeek-v0.2.0-x86_64-unknown-linux-gnu.tar.gz
+sudo install -m 755 datapeek-v0.2.0-x86_64-unknown-linux-gnu/datapeek /usr/local/bin/datapeek
 datapeek --version
 ```
 
@@ -137,7 +140,7 @@ For a user install instead of `/usr/local/bin`:
 
 ```bash
 mkdir -p "$HOME/.local/bin"
-install -m 755 datapeek-v0.1.0-x86_64-unknown-linux-gnu/datapeek "$HOME/.local/bin/datapeek"
+install -m 755 datapeek-v0.2.0-x86_64-unknown-linux-gnu/datapeek "$HOME/.local/bin/datapeek"
 export PATH="$HOME/.local/bin:$PATH"
 datapeek --version
 ```
@@ -155,28 +158,28 @@ Extract it with `Expand-Archive`. `unzip` works too. Do not extract it with
 
    ```powershell
    Invoke-WebRequest `
-     -Uri https://github.com/Jherin89/datapeek/releases/download/v0.1.0/datapeek-v0.1.0-x86_64-pc-windows-msvc.zip `
-     -OutFile datapeek-v0.1.0-x86_64-pc-windows-msvc.zip
+     -Uri https://github.com/Jherin89/datapeek/releases/download/v0.2.0/datapeek-v0.2.0-x86_64-pc-windows-msvc.zip `
+     -OutFile datapeek-v0.2.0-x86_64-pc-windows-msvc.zip
    ```
 
-2. Extract it. This creates `datapeek-v0.1.0-x86_64-pc-windows-msvc\`
+2. Extract it. This creates `datapeek-v0.2.0-x86_64-pc-windows-msvc\`
    containing `datapeek.exe`, `LICENSE`, and `README.md`.
 
    ```powershell
-   Expand-Archive -Path datapeek-v0.1.0-x86_64-pc-windows-msvc.zip -DestinationPath .
+   Expand-Archive -Path datapeek-v0.2.0-x86_64-pc-windows-msvc.zip -DestinationPath .
    ```
 
 3. Confirm the binary before changing `PATH`.
 
    ```powershell
-   .\datapeek-v0.1.0-x86_64-pc-windows-msvc\datapeek.exe --version
+   .\datapeek-v0.2.0-x86_64-pc-windows-msvc\datapeek.exe --version
    ```
 
 4. Add that folder to your user `Path`, then open a new terminal so the
    change is picked up.
 
    ```powershell
-   $dir = (Resolve-Path .\datapeek-v0.1.0-x86_64-pc-windows-msvc).Path
+   $dir = (Resolve-Path .\datapeek-v0.2.0-x86_64-pc-windows-msvc).Path
    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
    if ($userPath -notlike "*$dir*") {
      [Environment]::SetEnvironmentVariable('Path', "$userPath;$dir", 'User')
@@ -191,8 +194,9 @@ Extract it with `Expand-Archive`. `unzip` works too. Do not extract it with
 
 ### From source with cargo
 
-This needs Rust 1.85 or newer. The repo pins 1.85.1 in `rust-toolchain.toml`,
-so a rustup-managed toolchain will download that compiler when you build.
+This needs Rust 1.89 or newer. `rust-toolchain.toml` tracks the stable
+channel and includes rustfmt and clippy, so a rustup-managed toolchain uses
+the current stable compiler. The crate's minimum supported version is 1.89.
 
 Install Rust from <https://rustup.rs> if you do not already have it.
 
@@ -211,19 +215,50 @@ on `PATH`.
 Then install datapeek from this repository:
 
 ```bash
-cargo install --git https://github.com/Jherin89/datapeek
+cargo install --git https://github.com/Jherin89/datapeek --tag v0.2.0
 datapeek --version
 ```
 
 `cargo install` puts the binary in `~/.cargo/bin` (or `%USERPROFILE%\.cargo\bin`
 on Windows), which rustup adds to `PATH`.
 
+### Build from source
+
+Clone the tag and build the release binary. This is the same compiler
+requirement as `cargo install`: Rust 1.89 or newer, with the repo toolchain
+file selecting stable.
+
+macOS or Linux:
+
+```bash
+git clone https://github.com/Jherin89/datapeek
+cd datapeek
+git checkout v0.2.0
+cargo build --release
+sudo install -m 755 target/release/datapeek /usr/local/bin/datapeek
+datapeek --version
+```
+
+Windows (PowerShell), after Rust is on `PATH`:
+
+```powershell
+git clone https://github.com/Jherin89/datapeek
+cd datapeek
+git checkout v0.2.0
+cargo build --release
+.\target\release\datapeek.exe --version
+```
+
+Copy `target\release\datapeek.exe` onto your user `Path` the same way as the
+downloaded zip, or run it from that path.
+
 ## Usage
 
 ### First run
 
 The repo includes small files in [`samples/`](samples/): `orders.csv`,
-`events.tsv`, `orders.parquet`, and `metrics.jsonl`.
+`events.tsv`, `orders.parquet`, `metrics.jsonl`, and `orders.xlsx` (sheets
+`Orders`, `Returns`, and `Types`).
 
 ```bash
 datapeek samples/orders.csv
@@ -248,8 +283,13 @@ profile is:
   note        text     75.0%  gift wrap   wait        5         rush 8.3% · gift wrap 8.3% · hold 4.2%
 ```
 
-The header is the file path and the row × column shape. `--sample` changes
-the shape line to `sampled first N rows × … columns`.
+The header is the file path and the row × column shape. A full read says
+`24 rows × 7 columns`. `--head 5` says `first 5 rows × 7 columns`.
+`--sample 5 --seed 1` says `random sample of 5 rows (seed 1) × 7 columns`
+(the seed phrase is omitted when you do not pass `--seed`). An Excel profile
+prefixes the sheet name: `sheet Orders · 24 rows × 7 columns`. When the
+requested row count covers the whole file, the shape line is the full-read
+form and `mode` in the JSON is `full`.
 
 The other samples:
 
@@ -257,13 +297,14 @@ The other samples:
 datapeek samples/events.tsv
 datapeek samples/orders.parquet
 datapeek samples/metrics.jsonl
+datapeek samples/orders.xlsx
 ```
 
 ### Reading the table
 
 | Column | Meaning |
 | --- | --- |
-| **column** | Field name from the header or Parquet/JSON schema. |
+| **column** | Field name from the header, the Parquet/JSON schema, or the first row of an Excel sheet. |
 | **type** | `integer`, `decimal`, `date`, `bool`, or `text`. |
 | **miss** | Percent of rows that are null or empty. `0%` when nothing is missing, `<0.1%` for a tiny share, one decimal otherwise. |
 | **min / max** | Range. Text is lexicographic. The table prints thousands separators (`1,001`). `--json` emits numeric bounds as JSON numbers (`1001`). |
@@ -282,13 +323,19 @@ datapeek [OPTIONS] <FILE>
 | `<FILE>` | Data file to profile. Required. |
 | `--json` | Pretty-printed JSON profile instead of the table. |
 | `-c, --columns <COLS>` | Comma-separated column names to keep, in the order you list them. |
-| `--sample <N>` | Profile only the first N rows. |
+| `--sample <N>` | Uniform random sample of N rows from the whole file. If N is at least the row count, every row is used and the profile is a full read. Cannot be combined with `--head`. |
+| `--seed <SEED>` | `u64` seed for `--sample`. The same seed profiles the same rows. Requires `--sample`. Omit it and each run draws a new sample. |
+| `--head <N>` | Profile the first N rows and stop scanning. Cannot be combined with `--sample`. |
+| `--sheet <NAME\|INDEX>` | Excel sheet to profile. An exact sheet name wins, even when that name is numeric. Otherwise a value that parses as an integer is a 0-based index (`01` is index 1). The default is the first sheet. On a non-Excel file this flag is an error. |
 | `-h, --help` | Print help. |
-| `-V, --version` | Print `datapeek 0.1.0`. |
+| `-V, --version` | Print `datapeek 0.2.0`. |
 
 **`--json`.** Same profile as the table. Numeric min/max are raw JSON numbers.
 `histogram` and `sparkline` are present only for numeric and date columns.
-`sample_limit` is present only when you passed `--sample`.
+`mode` is `full`, `head`, or `random`. `seed` is the `--seed` value, or
+`null` when you did not pass one. `sampled` is true only for a strict subset
+(`head` or `random`). `sample_limit` is the N you asked for, and it is
+omitted when the profile covers the whole file. `sheet` is present for Excel.
 
 ```bash
 datapeek --json samples/orders.csv
@@ -305,6 +352,8 @@ Full pretty-printed output of that command:
   "rows": 24,
   "columns": 7,
   "sampled": false,
+  "mode": "full",
+  "seed": null,
   "format": "csv",
   "profile": [
     {
@@ -520,16 +569,101 @@ datapeek --columns customer,amount samples/orders.csv
   amount    decimal  8.3%  4.5   249       7         19.99 33.3% · 249 12.5% · 9.99 12.5%       █▁▃▁▂▁▁▃
 ```
 
-**`--sample`.** Delimited files and Parquet stop after N rows. JSON Lines is
-read and then sliced to N rows.
+**Excel.** `.xlsx`, `.xlsm`, `.xls`, and `.xlsb` are detected by extension.
+The first sheet is the default. The first row is the header. Cells become
+integers, decimals, bools, or dates. An Excel date with a time of day is a
+datetime (still reported as `date`, with `YYYY-MM-DD HH:MM:SS` bounds). A
+column that mixes those types falls back to text. Empty cells are null.
+`samples/orders.xlsx` sheet `Orders` matches `samples/orders.csv`:
 
 ```bash
-datapeek --sample 5 samples/orders.csv
+datapeek samples/orders.xlsx
+```
+
+```
+  datapeek  samples/orders.xlsx
+  sheet Orders · 24 rows × 7 columns
+
+  column      type     miss   min         max         distinct  top values                                  dist
+  ──────────  ───────  ─────  ──────────  ──────────  ────────  ──────────────────────────────────────────  ────────
+  order_id    integer  0%     1,001       1,024       24        —                                           ████████
+  customer    text     0%     Acme        Umbrella    6         Acme 29.2% · Globex 20.8% · Initech 16.7%
+  sku         text     0%     GADGET-2    WIDGET-7    6         WIDGET-1 33.3% · WIDGET-2 16.7% · GADGET-…
+  amount      decimal  8.3%   4.5         249         7         19.99 33.3% · 249 12.5% · 9.99 12.5%        █▁▃▁▂▁▁▃
+  order_date  date     0%     2024-01-15  2024-01-27  13        2024-01-16 8.3% · 2024-01-17 8.3% · 2024-…  ▆▅█▅█▅█▆
+  shipped     bool     0%     false       true        2         true 75.0% · false 25.0%
+  note        text     75.0%  gift wrap   wait        5         rush 8.3% · gift wrap 8.3% · hold 4.2%
+```
+
+**`--sheet`.** A value that equals a sheet name exactly wins, including a
+numeric name. Otherwise an integer is a 0-based index, so `--sheet 1` is the
+second sheet and `--sheet Returns` is the same sheet by name. An unknown
+sheet exits 1 and lists the names that exist.
+
+```bash
+datapeek --sheet Returns samples/orders.xlsx
+datapeek --sheet 1 samples/orders.xlsx
+```
+
+```
+  datapeek  samples/orders.xlsx
+  sheet Returns · 3 rows × 5 columns
+
+  column       type     miss   min                  max                  distinct  top values                                  dist
+  ───────────  ───────  ─────  ───────────────────  ───────────────────  ────────  ──────────────────────────────────────────  ────────
+  return_id    integer  0%     1                    3                    3         1 33.3% · 2 33.3% · 3 33.3%                 █▁▁▁█▁▁█
+  order_id     integer  0%     1,002                1,015                3         1,002 33.3% · 1,011 33.3% · 1,015 33.3%     █▁▁▁▁█▁█
+  reason       text     0%     damaged              wrong item           3         damaged 33.3% · wrong item 33.3% · late 3…
+  refund       integer  33.3%  10                   249                  3         249 33.3% · 10 33.3%                        █▁▁▁▁▁▁█
+  received_at  date     0%     2024-02-01 09:30:00  2024-02-03 00:00:00  3         2024-02-01 09:30:00 33.3% · 2024-02-02 15…  █▁▁▁▁▁██
+```
+
+`refund` is an integer because both populated cells are whole numbers, and
+one cell is empty (33.3% missing). `received_at` keeps the time of day.
+`--sheet` on a CSV, TSV, Parquet, or JSON Lines file is an error. `--columns`,
+`--json`, `--sample`, `--head`, and `--seed` work on a sheet the same way
+they work on a text file.
+
+**`--sample`.** A uniform draw of N rows from the whole file, not a prefix.
+Pass `--seed` when you want the same rows again. The header names the mode
+and, when you passed one, the seed. On `orders.csv` the ids are sorted, so a
+sample of 5 with seed 1 is not the first five orders (`order_id` runs
+1,007–1,022 here, not 1,001–1,005):
+
+```bash
+datapeek --sample 5 --seed 1 samples/orders.csv
 ```
 
 ```
   datapeek  samples/orders.csv
-  sampled first 5 rows × 7 columns
+  random sample of 5 rows (seed 1) × 7 columns
+
+  column      type     miss   min         max         distinct  top values                                  dist
+  ──────────  ───────  ─────  ──────────  ──────────  ────────  ──────────────────────────────────────────  ────────
+  order_id    integer  0%     1,007       1,022       5         —                                           █▁▁███▁█
+  customer    text     0%     Globex      Initech     3         Initech 40.0% · Hooli 40.0% · Globex 20.0%
+  sku         text     0%     WIDGET-1    WIDGET-3    3         WIDGET-1 40.0% · WIDGET-3 40.0% · WIDGET-…
+  amount      decimal  0%     4.5         249         3         19.99 40.0% · 4.5 40.0% · 249 20.0%         █▁▁▁▁▁▁▃
+  order_date  date     0%     2024-01-18  2024-01-26  4         2024-01-23 40.0% · 2024-01-18 20.0% · 202…  ▅▁▁▅▁█▁▅
+  shipped     bool     0%     false       true        2         true 80.0% · false 20.0%
+  note        text     80.0%  hold        hold        2         hold 20.0%
+```
+
+The JSON for that command sets `"sampled": true`, `"sample_limit": 5`,
+`"mode": "random"`, and `"seed": 1`. If N is at least the number of rows,
+every row is used, `sampled` is false, `sample_limit` is omitted, and `mode`
+is `full`.
+
+**`--head`.** The fast prefix. Scanning stops after N rows. Same file, first
+five rows:
+
+```bash
+datapeek --head 5 samples/orders.csv
+```
+
+```
+  datapeek  samples/orders.csv
+  first 5 rows × 7 columns
 
   column      type     miss   min         max         distinct  top values                                  dist
   ──────────  ───────  ─────  ──────────  ──────────  ────────  ──────────────────────────────────────────  ────────
@@ -542,6 +676,10 @@ datapeek --sample 5 samples/orders.csv
   note        text     60.0%  gift wrap   rush        3         rush 20.0% · gift wrap 20.0%
 ```
 
+`--sample` and `--head` together are rejected (exit 2). `--seed` without
+`--sample` is rejected (exit 2). `N` of 0 exits 1 with `row limit must be at
+least 1`.
+
 ### Formats
 
 | Format | How datapeek recognizes it |
@@ -550,12 +688,13 @@ datapeek --sample 5 samples/orders.csv
 | **TSV** | `.tsv` or `.tab` is always tab-separated. A `.csv` that is actually tabs is sniffed as TSV. |
 | **Parquet** | `.parquet` or `.pq`, or a file whose first bytes are the `PAR1` magic. |
 | **JSON Lines** | `.jsonl`, `.ndjson`, or `.json`. A file with no extension is treated as JSON Lines when the first non-empty line starts with `{` or `[`. |
+| **Excel** | `.xlsx`, `.xlsm`, `.xls`, or `.xlsb`. The first sheet is profiled unless you pass `--sheet`. The first row is the header. |
 | **Extensionless text** | Sniffed as Parquet, then JSON Lines, then a delimited table. |
 
-Excel workbooks (`.xlsx`, `.xlsm`, `.xls`, `.ods`, `.xlsb`) are rejected.
-Dates in delimited files are parsed when they look like `YYYY-MM-DD`,
-`MM/DD/YYYY`, `DD/MM/YYYY`, or an ISO datetime. A string column whose sampled
-values are all integers, decimals, or booleans is reported as that type.
+OpenDocument spreadsheets (`.ods`) are rejected. Dates in delimited files are
+parsed when they look like `YYYY-MM-DD`,
+`MM/DD/YYYY`, `DD/MM/YYYY`, or an ISO datetime. A string column whose values
+are all integers, decimals, or booleans is reported as that type.
 
 A file that is not actually the format it claims to be exits `1` with
 `datapeek: failed to parse …`. A delimited row with more fields than the
@@ -567,14 +706,17 @@ header is a parse error too.
 | --- | --- |
 | `0` | The profile was written. Closing the pipe early, as in `datapeek file \| head`, is also success. |
 | `1` | A datapeek error. The message is on stderr and starts with `datapeek: `. |
-| `2` | The arguments are wrong (missing file, or `--sample` is not a number). This comes from the argument parser. |
+| `2` | The arguments are wrong (missing file, `--sample` is not a number, `--sample` combined with `--head`, or `--seed` without `--sample`). This comes from the argument parser. |
 
 ```text
 datapeek: no such file: /tmp/no-such-datapeek.csv
 datapeek: is a directory: samples
 datapeek: file is empty: /tmp/empty-datapeek.csv
 datapeek: unknown column 'nope' (have: order_id, customer, sku, amount, order_date, shipped, note)
-datapeek: Excel files are not supported in v1: /tmp/book.xlsx
+datapeek: unknown sheet 'Missing' (have: Orders, Returns, Types)
+datapeek: --sheet only applies to Excel files (.xlsx, .xlsm, .xls, .xlsb); 'samples/orders.csv' is csv
+datapeek: unsupported file 'book.ods': OpenDocument spreadsheets are not supported (try CSV, TSV, Parquet, JSON Lines, or Excel)
+datapeek: row limit must be at least 1
 datapeek: failed to parse '/tmp/bad.parquet': parquet: File out of specification: The file must end with PAR1: 'parquet scan'
 ```
 
@@ -629,11 +771,12 @@ datapeek --json samples/orders.csv \
 {"name":"note","type":"text","missing_pct":75.0,"min":"gift wrap","max":"wait"}
 ```
 
-**Peek at a large file.** Profile the first 100,000 rows while you decide
-whether to scan the rest.
+**Peek at a large file.** `--head` stops after the first rows, which is the
+quick look. `--sample` with a seed is a repeatable draw from the whole file.
 
 ```bash
-datapeek --sample 100000 huge.csv
+datapeek --head 100000 huge.csv
+datapeek --sample 100000 --seed 1 huge.csv
 ```
 
 **Profile one measure.**
@@ -644,26 +787,61 @@ datapeek --columns amount,order_date samples/orders.csv
 
 ## Performance
 
-Delimited and Parquet files go through a Polars lazy scan. `--sample` stops
-that scan after N rows. A few million rows on a laptop is the design point.
+A full read of a delimited or Parquet file is a Polars lazy scan. `--head`
+stops that scan after N rows. `--sample` streams the file (CSV and JSON
+Lines) or reads only the Parquet row groups that hold the chosen indexes,
+then profiles those rows. A few million rows on a laptop is the design point.
 
-On a Linux x86_64 check, **2,000,000 rows × 7 columns** of CSV profiled in
-**0.67 seconds**. `--sample 100000` on the same file was **0.17 seconds**.
+Measured on Linux x86_64 with `target/release/datapeek`, warm page cache,
+median of three runs after one warmup. The file is 2,000,000 rows × 7
+columns of CSV (about 91 MiB) and is not in the repo.
+
+| Command | Median | The three runs |
+| --- | --- | --- |
+| `datapeek bench-2m.csv` | **0.59 s** | 0.587 s, 0.600 s, 0.561 s |
+| `datapeek --sample 100000 --seed 1 bench-2m.csv` | **0.47 s** | 0.467 s, 0.583 s, 0.472 s |
+| `datapeek --head 100000 bench-2m.csv` | **0.22 s** | 0.217 s, 0.220 s, 0.261 s |
+
+v0.1 measured 0.67 s for a full profile of the same shape, and 0.17 s when
+`--sample` still meant the first 100,000 rows. The full-file path is still
+that lazy scan.
 
 ## How it works
 
-Polars infers a schema from the file. String columns get an extra pass so
-dates and bools are not left as text. Missingness, min/max, and distinct
-counts are vectorized aggregations. Top values come from `value_counts`.
-Numeric and date histograms are an 8-bin pass used only to draw the sparkline.
+Polars infers a schema from CSV, TSV, Parquet, and JSON Lines. String columns
+get an extra pass so dates and bools are not left as text. Missingness,
+min/max, and distinct counts are vectorized aggregations. Top values come
+from `value_counts`. Numeric and date histograms are an 8-bin pass used only
+to draw the sparkline.
+
+Excel is read with [calamine](https://github.com/tafia/calamine). The chosen
+sheet is already in memory, so sampling picks row indexes out of that sheet.
+Each column is typed from its cells. Whole numbers (including integral Excel
+floats) become integers, other finite numbers become decimals, and bools stay
+bools. A midnight Excel date stays a date. Any other time of day becomes a
+datetime. Both are shown as `date`. A column that mixes incompatible types
+becomes text. Empty cells and error cells are null.
+
+`--sample` uses reservoir sampling (Algorithm R, seeded with `rand`'s
+StdRng). CSV keeps the sampled records and parses only those rows with the
+same Polars reader as a full scan. JSON Lines does the same with the sampled
+lines. Parquet reads the row groups that intersect the chosen indexes, then
+takes those rows. When N covers the file, datapeek uses the normal full-file
+loader so the profile matches an unsampled run. `--head` asks the reader to
+stop after N rows.
 
 ## Development
+
+Rust 1.89 or newer. `rust-toolchain.toml` tracks stable.
 
 ```bash
 cargo test
 cargo run --release -- samples/orders.csv
 cargo run --example gen_parquet    # regenerate samples/orders.parquet
+cargo run --example gen_xlsx       # regenerate samples/orders.xlsx
 ```
+
+History of user-facing changes is in [CHANGELOG.md](CHANGELOG.md).
 
 CI runs `fmt` and `clippy` on Ubuntu, and `cargo test` on Ubuntu, macOS, and
 Windows, for every push and pull request. Pushing a `v*` tag builds release
@@ -675,12 +853,14 @@ archives and attaches them to the GitHub Release:
 - `datapeek-<tag>-x86_64-pc-windows-msvc.zip` — a real Deflate zip, built with 7-Zip and checked for a `PK` header. Extract it with `Expand-Archive` (or `unzip`). It contains `datapeek.exe`, `LICENSE`, and `README.md`.
 
 The GIF at the top is `docs/demo.tape`, recorded with
-[vhs](https://github.com/charmbracelet/vhs). From the repo root, with `jq`
-and a release build on `PATH`:
+[vhs](https://github.com/charmbracelet/vhs). The still above it is
+`docs/screenshot.tape` (`datapeek samples/orders.xlsx`). From the repo root,
+with `jq` and a release build on `PATH`:
 
 ```bash
 export PATH="$PWD/target/release:$PATH"
 vhs docs/demo.tape
+vhs docs/screenshot.tape
 ```
 
 ## License
