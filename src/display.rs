@@ -2,7 +2,7 @@ use std::io::IsTerminal;
 
 use colored::{ColoredString, Colorize};
 
-use crate::profile::{fmt_uint, ColumnProfile, FileProfile, InferredType};
+use crate::profile::{fmt_uint, ColumnProfile, FileProfile, InferredType, StatValue};
 
 /// Render a colored terminal table, one row per column.
 pub fn render_table(profile: &FileProfile) -> String {
@@ -119,8 +119,16 @@ impl DisplayRow {
             dtype_kind: col.dtype,
             miss: fmt_pct(col.missing_pct),
             missing_pct: col.missing_pct,
-            min: col.min.clone().unwrap_or_else(|| "—".into()),
-            max: col.max.clone().unwrap_or_else(|| "—".into()),
+            min: col
+                .min
+                .as_ref()
+                .map(StatValue::to_display)
+                .unwrap_or_else(|| "—".into()),
+            max: col
+                .max
+                .as_ref()
+                .map(StatValue::to_display)
+                .unwrap_or_else(|| "—".into()),
             distinct: fmt_uint(col.distinct as u64),
             top,
             hist: col.sparkline.clone().unwrap_or_default(),

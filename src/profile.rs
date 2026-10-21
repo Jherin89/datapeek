@@ -44,14 +44,38 @@ pub struct TopValue {
     pub pct: f64,
 }
 
+/// A column min or max.
+///
+/// Numeric variants serialize as raw JSON numbers. The terminal table uses
+/// [`StatValue::to_display`], which still groups thousands.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum StatValue {
+    Integer(i64),
+    Unsigned(u64),
+    Float(f64),
+    Text(String),
+}
+
+impl StatValue {
+    pub fn to_display(&self) -> String {
+        match self {
+            Self::Integer(n) => fmt_int(*n),
+            Self::Unsigned(n) => fmt_uint(*n),
+            Self::Float(v) => fmt_float(*v),
+            Self::Text(s) => s.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ColumnProfile {
     pub name: String,
     #[serde(rename = "type")]
     pub dtype: InferredType,
     pub missing_pct: f64,
-    pub min: Option<String>,
-    pub max: Option<String>,
+    pub min: Option<StatValue>,
+    pub max: Option<StatValue>,
     pub distinct: usize,
     pub top_values: Vec<TopValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -237,68 +261,84 @@ fn is_date_str(v: &str) -> bool {
         || chrono::DateTime::parse_from_rfc3339(v).is_ok()
 }
 
-fn min_max(s: &Series) -> (Option<String>, Option<String>) {
+fn min_max(s: &Series) -> (Option<StatValue>, Option<StatValue>) {
     let min = s
         .min_reduce()
         .ok()
-        .and_then(|sc| fmt_typed(s.dtype(), sc.value()));
+        .and_then(|sc| stat_value(s.dtype(), sc.value()));
     let max = s
         .max_reduce()
         .ok()
-        .and_then(|sc| fmt_typed(s.dtype(), sc.value()));
+        .and_then(|sc| stat_value(s.dtype(), sc.value()));
     (min, max)
 }
 
 fn fmt_typed(dtype: &DataType, av: &AnyValue<'_>) -> Option<String> {
+    stat_value(dtype, av).map(|v| v.to_display())
+}
+
+fn stat_value(dtype: &DataType, av: &AnyValue<'_>) -> Option<StatValue> {
     match dtype {
         DataType::Date => {
             let days = match av {
                 AnyValue::Date(d) => *d,
                 AnyValue::Int32(d) => *d,
                 AnyValue::Int64(d) => *d as i32,
-                _ => return fmt_any(av),
+                _ => return stat_any(av),
             };
-            Some(format_date(days))
+            Some(StatValue::Text(format_date(days)))
         }
         DataType::Datetime(unit, _) => {
             let v = match av {
                 AnyValue::Datetime(v, _, _) => *v,
                 AnyValue::Int64(v) => *v,
-                _ => return fmt_any(av),
+                _ => return stat_any(av),
             };
-            Some(format_datetime(v, *unit))
+            Some(StatValue::Text(format_datetime(v, *unit)))
         }
-        _ => fmt_any(av),
+        _ => stat_any(av),
     }
 }
 
-fn fmt_any(av: &AnyValue) -> Option<String> {
+fn stat_any(av: &AnyValue) -> Option<StatValue> {
     match av {
         AnyValue::Null => None,
-        AnyValue::String(s) => Some(truncate(s, 48)),
-        AnyValue::StringOwned(s) => Some(truncate(s, 48)),
-        AnyValue::Boolean(b) => Some(if *b { "true".into() } else { "false".into() }),
-        AnyValue::Int8(v) => Some(fmt_int(*v as i64)),
-        AnyValue::Int16(v) => Some(fmt_int(*v as i64)),
-        AnyValue::Int32(v) => Some(fmt_int(*v as i64)),
-        AnyValue::Int64(v) => Some(fmt_int(*v)),
-        AnyValue::UInt8(v) => Some(fmt_uint(*v as u64)),
-        AnyValue::UInt16(v) => Some(fmt_uint(*v as u64)),
-        AnyValue::UInt32(v) => Some(fmt_uint(*v as u64)),
-        AnyValue::UInt64(v) => Some(fmt_uint(*v)),
-        AnyValue::Float32(v) => Some(fmt_float(*v as f64)),
-        AnyValue::Float64(v) => Some(fmt_float(*v)),
-        AnyValue::Date(days) => Some(format_date(*days)),
-        AnyValue::Datetime(v, unit, _) => Some(format_datetime(*v, *unit)),
+        AnyValue::String(s) => Some(StatValue::Text(truncate(s, 48))),
+        AnyValue::StringOwned(s) => Some(StatValue::Text(truncate(s, 48))),
+        AnyValue::Boolean(b) => Some(StatValue::Text(if *b {
+            "true".into()
+        } else {
+            "false".into()
+        })),
+        AnyValue::Int8(v) => Some(StatValue::Integer(*v as i64)),
+        AnyValue::Int16(v) => Some(StatValue::Integer(*v as i64)),
+        AnyValue::Int32(v) => Some(StatValue::Integer(*v as i64)),
+        AnyValue::Int64(v) => Some(StatValue::Integer(*v)),
+        AnyValue::UInt8(v) => Some(StatValue::Unsigned(*v as u64)),
+        AnyValue::UInt16(v) => Some(StatValue::Unsigned(*v as u64)),
+        AnyValue::UInt32(v) => Some(StatValue::Unsigned(*v as u64)),
+        AnyValue::UInt64(v) => Some(StatValue::Unsigned(*v)),
+        AnyValue::Float32(v) => Some(float_stat(*v as f64)),
+        AnyValue::Float64(v) => Some(float_stat(*v)),
+        AnyValue::Date(days) => Some(StatValue::Text(format_date(*days))),
+        AnyValue::Datetime(v, unit, _) => Some(StatValue::Text(format_datetime(*v, *unit))),
         other => {
             let s = other.to_string();
             let s = s.trim_matches('"').to_string();
             if s.is_empty() || s == "null" {
                 None
             } else {
-                Some(s)
+                Some(StatValue::Text(s))
             }
         }
+    }
+}
+
+fn float_stat(v: f64) -> StatValue {
+    if v.is_finite() {
+        StatValue::Float(v)
+    } else {
+        StatValue::Text(v.to_string())
     }
 }
 
@@ -480,6 +520,51 @@ mod tests {
         assert_eq!(fmt_int(1234567), "1,234,567");
         assert_eq!(fmt_int(-42), "-42");
         assert_eq!(fmt_uint(0), "0");
+    }
+
+    #[test]
+    fn json_numeric_minmax_are_raw_numbers() {
+        assert_eq!(
+            serde_json::to_string(&StatValue::Integer(1001)).unwrap(),
+            "1001"
+        );
+        assert_eq!(StatValue::Integer(1001).to_display(), "1,001");
+        assert_eq!(
+            serde_json::to_string(&StatValue::Integer(-1001)).unwrap(),
+            "-1001"
+        );
+        assert_eq!(StatValue::Integer(-1001).to_display(), "-1,001");
+        assert_eq!(
+            serde_json::to_string(&StatValue::Float(4.5)).unwrap(),
+            "4.5"
+        );
+        assert_eq!(
+            serde_json::to_string(&StatValue::Text("Acme".into())).unwrap(),
+            "\"Acme\""
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let csv = dir.path().join("nums.csv");
+        std::fs::write(
+            &csv,
+            "id,amount,name\n1001,4.5,Acme\n1002,5.5,Acme\n1024,249,Umbrella\n1003,6,Acme\n1004,7,Acme\n",
+        )
+        .unwrap();
+        let profile = profile_path(&csv, None, None).unwrap();
+        let id = &profile.profile[0];
+        assert_eq!(id.min.as_ref().unwrap().to_display(), "1,001");
+        assert_eq!(id.max.as_ref().unwrap().to_display(), "1,024");
+        let json = profile.to_json().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["profile"][0]["min"], serde_json::json!(1001));
+        assert_eq!(v["profile"][0]["max"], serde_json::json!(1024));
+        assert!(v["profile"][1]["min"].is_number());
+        assert!(v["profile"][1]["max"].is_number());
+        assert_eq!(v["profile"][2]["min"], "Acme");
+        assert_eq!(v["profile"][2]["max"], "Umbrella");
+        assert!(json.contains("\"min\": 1001"));
+        assert!(!json.contains("\"min\": \"1,001\""));
+        assert!(!json.contains("1,001"));
     }
 
     #[test]

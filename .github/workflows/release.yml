@@ -9,34 +9,91 @@ permissions:
   contents: write
 
 jobs:
-  macos-arm64:
-    name: aarch64-apple-darwin
-    runs-on: macos-14
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macos-latest is Apple Silicon. macos-13 is retired; macos-15-intel
+          # is the hosted x86_64 macOS runner, so that target is a native build.
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@1.85.1
         with:
-          targets: aarch64-apple-darwin
+          targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --target aarch64-apple-darwin
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package
+        shell: bash
         run: |
-          STAGE=datapeek-aarch64-apple-darwin
-          mkdir -p dist/$STAGE
-          cp target/aarch64-apple-darwin/release/datapeek dist/$STAGE/
-          cp README.md LICENSE dist/$STAGE/
-          tar -C dist -czf dist/$STAGE.tar.gz $STAGE
-          shasum -a 256 dist/$STAGE.tar.gz | tee dist/$STAGE.sha256
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          target="${{ matrix.target }}"
+          stage="datapeek-${tag}-${target}"
+          mkdir -p "dist/${stage}"
+          cp README.md LICENSE "dist/${stage}/"
+          if [ "$target" = "x86_64-pc-windows-msvc" ]; then
+            cp "target/${target}/release/datapeek.exe" "dist/${stage}/datapeek.exe"
+            # bsdtar on the Windows runner writes a zip with forward-slash entries.
+            tar -a -cf "dist/${stage}.zip" -C dist "${stage}"
+            tar -tf "dist/${stage}.zip" | grep -q "${stage}/datapeek.exe"
+          else
+            cp "target/${target}/release/datapeek" "dist/${stage}/datapeek"
+            tar -C dist -czf "dist/${stage}.tar.gz" "${stage}"
+            tar -tzf "dist/${stage}.tar.gz" | grep -qx "${stage}/datapeek"
+          fi
+          rm -rf "dist/${stage}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/datapeek-*
+          if-no-files-found: error
+
+  release:
+    name: GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Check assets
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          ls -la dist
+          test -f "dist/datapeek-${tag}-aarch64-apple-darwin.tar.gz"
+          test -f "dist/datapeek-${tag}-x86_64-apple-darwin.tar.gz"
+          test -f "dist/datapeek-${tag}-x86_64-unknown-linux-gnu.tar.gz"
+          test -f "dist/datapeek-${tag}-x86_64-pc-windows-msvc.zip"
 
       - name: Attach to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: |
-            dist/datapeek-aarch64-apple-darwin.tar.gz
-            dist/datapeek-aarch64-apple-darwin.sha256
+            dist/datapeek-*.tar.gz
+            dist/datapeek-*.zip

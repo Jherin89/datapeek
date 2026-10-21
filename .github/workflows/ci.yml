@@ -6,8 +6,8 @@ on:
   pull_request:
 
 jobs:
-  ci:
-    name: fmt · clippy · test
+  fmt-clippy:
+    name: fmt · clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,6 +23,20 @@ jobs:
 
       - name: clippy
         run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.85.1
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: test
         run: cargo test --all

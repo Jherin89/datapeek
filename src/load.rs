@@ -226,6 +226,12 @@ mod tests {
     }
 
     #[test]
+    fn detects_comma_with_crlf() {
+        let sample = b"a,b,c\r\n1,2,3\r\n4,5,6\r\n";
+        assert_eq!(detect_delimiter(sample), b',');
+    }
+
+    #[test]
     fn detects_tab() {
         let sample = b"a\tb\tc\n1\t2\t3\n4\t5\t6\n";
         assert_eq!(detect_delimiter(sample), b'\t');

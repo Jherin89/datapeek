@@ -18,18 +18,50 @@ datapeek orders.csv
 
 ## Install
 
-**From git** (any platform with a Rust toolchain):
+**From git** (macOS, Linux, or Windows, with Rust 1.85 or newer):
 
 ```bash
 cargo install --git https://github.com/Jherin89/datapeek
 ```
 
-**Prebuilt macOS Apple Silicon binary** from
-[GitHub Releases](https://github.com/Jherin89/datapeek/releases):
+**Prebuilt binaries** are attached to each
+[GitHub Release](https://github.com/Jherin89/datapeek/releases).
+
+### macOS (Apple Silicon)
 
 ```bash
-tar -xzf datapeek-aarch64-apple-darwin.tar.gz
-install -m 755 datapeek-aarch64-apple-darwin/datapeek /usr/local/bin/datapeek
+curl -fL -o datapeek-v0.1.0-aarch64-apple-darwin.tar.gz \
+  https://github.com/Jherin89/datapeek/releases/download/v0.1.0/datapeek-v0.1.0-aarch64-apple-darwin.tar.gz
+tar -xzf datapeek-v0.1.0-aarch64-apple-darwin.tar.gz
+sudo install -m 755 datapeek-v0.1.0-aarch64-apple-darwin/datapeek /usr/local/bin/datapeek
+```
+
+### macOS (Intel)
+
+```bash
+curl -fL -o datapeek-v0.1.0-x86_64-apple-darwin.tar.gz \
+  https://github.com/Jherin89/datapeek/releases/download/v0.1.0/datapeek-v0.1.0-x86_64-apple-darwin.tar.gz
+tar -xzf datapeek-v0.1.0-x86_64-apple-darwin.tar.gz
+sudo install -m 755 datapeek-v0.1.0-x86_64-apple-darwin/datapeek /usr/local/bin/datapeek
+```
+
+### Linux (x86_64)
+
+```bash
+curl -fL -o datapeek-v0.1.0-x86_64-unknown-linux-gnu.tar.gz \
+  https://github.com/Jherin89/datapeek/releases/download/v0.1.0/datapeek-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf datapeek-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+sudo install -m 755 datapeek-v0.1.0-x86_64-unknown-linux-gnu/datapeek /usr/local/bin/datapeek
+```
+
+### Windows (x86_64)
+
+```powershell
+Invoke-WebRequest `
+  -Uri https://github.com/Jherin89/datapeek/releases/download/v0.1.0/datapeek-v0.1.0-x86_64-pc-windows-msvc.zip `
+  -OutFile datapeek-v0.1.0-x86_64-pc-windows-msvc.zip
+Expand-Archive -Path datapeek-v0.1.0-x86_64-pc-windows-msvc.zip -DestinationPath .
+.\datapeek-v0.1.0-x86_64-pc-windows-msvc\datapeek.exe
 ```
 
 Building from source needs Rust 1.85 or newer.
@@ -71,13 +103,14 @@ One row per column:
 | --- | --- |
 | **type** | `integer`, `decimal`, `date`, `bool`, `text` |
 | **miss** | percent of rows that are empty / null |
-| **min / max** | range (lexicographic for text) |
+| **min / max** | range (lexicographic for text). `--json` emits numeric bounds as JSON numbers |
 | **distinct** | number of unique values |
 | **top values** | up to three most common values with % share of rows |
 | **dist** | 8-bin unicode sparkline on numeric and date columns |
 
 The header is the row × column shape. `--sample N` notes that you only profiled
-the first N rows. `--json` emits the same profile as pretty JSON.
+the first N rows. `--json` emits the same profile as pretty JSON. Numeric
+min/max are raw JSON numbers there; the table still prints thousands separators.
 
 Sample files live in [`samples/`](samples/): `orders.csv`, `events.tsv`,
 `orders.parquet`, and `metrics.jsonl`.
@@ -115,9 +148,14 @@ cargo run --release -- samples/orders.csv
 cargo run --example gen_parquet    # regenerate samples/orders.parquet
 ```
 
-CI runs `fmt`, `clippy`, and `test` on every push and PR. Pushing a `v*` tag
-builds an `aarch64-apple-darwin` binary on `macos-14` and attaches it to the
-GitHub Release.
+CI runs `fmt` and `clippy` on Ubuntu, and `cargo test` on Ubuntu, macOS, and
+Windows, for every push and pull request. Pushing a `v*` tag builds release
+archives and attaches them to the GitHub Release:
+
+- `datapeek-<tag>-aarch64-apple-darwin.tar.gz`
+- `datapeek-<tag>-x86_64-apple-darwin.tar.gz`
+- `datapeek-<tag>-x86_64-unknown-linux-gnu.tar.gz`
+- `datapeek-<tag>-x86_64-pc-windows-msvc.zip` (contains `datapeek.exe`)
 
 ## License
 
