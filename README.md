@@ -61,8 +61,13 @@ Invoke-WebRequest `
   -Uri https://github.com/Jherin89/datapeek/releases/download/v0.1.0/datapeek-v0.1.0-x86_64-pc-windows-msvc.zip `
   -OutFile datapeek-v0.1.0-x86_64-pc-windows-msvc.zip
 Expand-Archive -Path datapeek-v0.1.0-x86_64-pc-windows-msvc.zip -DestinationPath .
-.\datapeek-v0.1.0-x86_64-pc-windows-msvc\datapeek.exe
+.\datapeek-v0.1.0-x86_64-pc-windows-msvc\datapeek.exe --version
 ```
+
+The Windows asset is a real zip (Deflate, `PK` header), not a tar with a
+`.zip` name. Extract it with `Expand-Archive`, or with `unzip`. The archive
+contains the folder `datapeek-v0.1.0-x86_64-pc-windows-msvc\` with
+`datapeek.exe`, `LICENSE`, and `README.md`.
 
 Building from source needs Rust 1.85 or newer.
 
@@ -155,7 +160,7 @@ archives and attaches them to the GitHub Release:
 - `datapeek-<tag>-aarch64-apple-darwin.tar.gz`
 - `datapeek-<tag>-x86_64-apple-darwin.tar.gz`
 - `datapeek-<tag>-x86_64-unknown-linux-gnu.tar.gz`
-- `datapeek-<tag>-x86_64-pc-windows-msvc.zip` (contains `datapeek.exe`)
+- `datapeek-<tag>-x86_64-pc-windows-msvc.zip` — a real zip. Extract it with `Expand-Archive` (or `unzip`). Contains `datapeek.exe`, `LICENSE`, and `README.md`.
 
 ## License
 

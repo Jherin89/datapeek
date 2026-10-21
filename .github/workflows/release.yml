@@ -41,7 +41,11 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package
+      # Unix archives stay tar.gz. The Windows asset must be a real zip:
+      # Git for Windows ships GNU tar, and `tar -a` does not treat `.zip` as
+      # zip, so it writes an uncompressed tar that unzip and Expand-Archive reject.
+      - name: Package Unix
+        if: matrix.target != 'x86_64-pc-windows-msvc'
         shell: bash
         run: |
           set -euo pipefail
@@ -50,19 +54,68 @@ jobs:
           stage="datapeek-${tag}-${target}"
           mkdir -p "dist/${stage}"
           cp README.md LICENSE "dist/${stage}/"
-          if [ "$target" = "x86_64-pc-windows-msvc" ]; then
-            cp "target/${target}/release/datapeek.exe" "dist/${stage}/datapeek.exe"
-            # bsdtar on the Windows runner writes a zip with forward-slash entries.
-            tar -a -cf "dist/${stage}.zip" -C dist "${stage}"
-            # Read the full listing. grep -q exits early; GNU tar then fails the
-            # pipe with "stdout: write error" (exit 2) under pipefail.
-            tar -tf "dist/${stage}.zip" | grep -F "${stage}/datapeek.exe" >/dev/null
-          else
-            cp "target/${target}/release/datapeek" "dist/${stage}/datapeek"
-            tar -C dist -czf "dist/${stage}.tar.gz" "${stage}"
-            tar -tzf "dist/${stage}.tar.gz" | grep -x "${stage}/datapeek" >/dev/null
-          fi
+          cp "target/${target}/release/datapeek" "dist/${stage}/datapeek"
+          tar -C dist -czf "dist/${stage}.tar.gz" "${stage}"
+          # Read the full listing. grep -q exits early; GNU tar then fails the
+          # pipe with "stdout: write error" (exit 2) under pipefail.
+          tar -tzf "dist/${stage}.tar.gz" | grep -x "${stage}/datapeek" >/dev/null
           rm -rf "dist/${stage}"
+
+      - name: Package Windows
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:GITHUB_REF_NAME
+          $target = '${{ matrix.target }}'
+          $stage = "datapeek-$tag-$target"
+          New-Item -ItemType Directory -Force -Path "dist/$stage" | Out-Null
+          Copy-Item README.md, LICENSE -Destination "dist/$stage/"
+          Copy-Item "target/$target/release/datapeek.exe" -Destination "dist/$stage/datapeek.exe"
+
+          # 7-Zip is preinstalled on GitHub-hosted Windows runners. -mm=Deflate
+          # keeps the archive readable by Expand-Archive and by unzip.
+          $seven = $null
+          $cmd = Get-Command 7z -ErrorAction SilentlyContinue
+          if ($cmd) { $seven = $cmd.Source }
+          if (-not $seven) {
+            $candidate = Join-Path $env:ProgramFiles '7-Zip\7z.exe'
+            if (Test-Path -LiteralPath $candidate) { $seven = $candidate }
+          }
+          if (-not $seven) { throw '7z not found on PATH or under Program Files\7-Zip' }
+
+          Push-Location dist
+          try {
+            & $seven a -tzip -mm=Deflate -mx=9 -bd -bso1 -bsp0 "$stage.zip" $stage
+            if ($LASTEXITCODE -ne 0) { throw "7z a failed with exit $LASTEXITCODE" }
+            & $seven t -bso1 -bsp0 "$stage.zip"
+            if ($LASTEXITCODE -ne 0) { throw "7z t failed with exit $LASTEXITCODE" }
+          } finally {
+            Pop-Location
+          }
+
+          $zipPath = Join-Path (Get-Location) "dist/$stage.zip"
+          $bytes = [System.IO.File]::ReadAllBytes($zipPath)
+          $isZip = ($bytes.Length -ge 4) -and
+            ($bytes[0] -eq 0x50) -and ($bytes[1] -eq 0x4B) -and
+            ($bytes[2] -eq 0x03) -and ($bytes[3] -eq 0x04)
+          if (-not $isZip) {
+            $shown = if ($bytes.Length -ge 4) { [System.BitConverter]::ToString($bytes, 0, 4) } else { 'file shorter than 4 bytes' }
+            throw "not a zip: expected PK local-file header 50-4B-03-04, got $shown"
+          }
+
+          $listing = & $seven l -ba $zipPath
+          if ($LASTEXITCODE -ne 0) { throw "7z l failed with exit $LASTEXITCODE" }
+          $text = ($listing | Out-String)
+          foreach ($name in @('datapeek.exe', 'LICENSE', 'README.md')) {
+            $fwd = "$stage/$name"
+            $bwd = "$stage\$name"
+            if (($text -notlike "*$fwd*") -and ($text -notlike "*$bwd*")) {
+              throw "archive listing is missing $fwd`n$text"
+            }
+          }
+
+          Remove-Item -Recurse -Force "dist/$stage"
 
       - uses: actions/upload-artifact@v4
         with:
