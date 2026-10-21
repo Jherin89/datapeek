@@ -128,6 +128,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*
@@ -144,10 +146,28 @@ jobs:
           test -f "dist/datapeek-${tag}-x86_64-unknown-linux-gnu.tar.gz"
           test -f "dist/datapeek-${tag}-x86_64-pc-windows-msvc.zip"
 
+      # Notes live outside dist/ so the asset globs below do not upload them.
+      - name: Extract release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist-notes
+          awk -v version="$version" '
+            BEGIN { heading = "## [" version "]" }
+            index($0, heading) == 1 { found = 1; next }
+            found && index($0, "## [") == 1 { exit }
+            found { print }
+          ' CHANGELOG.md > dist-notes/RELEASE_NOTES.md
+          if ! grep -q '[^[:space:]]' dist-notes/RELEASE_NOTES.md; then
+            echo "No CHANGELOG section for ${version}" >&2
+            exit 1
+          fi
+
       - name: Attach to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          body_path: dist-notes/RELEASE_NOTES.md
           fail_on_unmatched_files: true
           files: |
             dist/datapeek-*.tar.gz
