@@ -5,6 +5,19 @@ All notable changes to datapeek are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `--strict` rejects CSV/TSV parsing errors and Excel error cells without writing a profile.
+- Parsing errors explain the affected column and value; Excel errors identify the worksheet cell. Strict failures offer a command to profile the same input with tolerated errors. `--verbose` exposes technical CSV parser details.
+- Tolerated parsing problems produce stderr warnings and a structured JSON `warnings` field. Excel warnings count error cells per selected column; missingness continues to include them.
+
+### Fixed
+
+- CSV/TSV parsing errors that previously became null values silently are now reported.
+- `--head` limits CSV value parsing and schema inference to the requested records, so an error in the lookahead record does not affect the profile.
+
 ## [0.2.0] - 2026-10-21
 
 ### Added

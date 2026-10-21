@@ -235,6 +235,7 @@ mod tests {
             format: "csv".into(),
             sheet,
             profile: Vec::new(),
+            warnings: Vec::new(),
         }
     }
 

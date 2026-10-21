@@ -12,7 +12,7 @@ use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use polars::prelude::*;
 
 use crate::error::{Error, Result};
-use crate::load::{ReadOutcome, RowSelect};
+use crate::load::{ParseWarning, ReadOutcome, RowSelect};
 use crate::sample;
 
 /// Pick a sheet.
@@ -54,6 +54,24 @@ pub fn load_excel(
     rows: RowSelect,
     sheet: Option<&str>,
 ) -> Result<(DataFrame, ReadOutcome, String)> {
+    let loaded = load_excel_with_policy(path, rows, sheet, None, false)?;
+    Ok((loaded.df, loaded.outcome, loaded.sheet))
+}
+
+pub(crate) struct ExcelLoaded {
+    pub df: DataFrame,
+    pub outcome: ReadOutcome,
+    pub sheet: String,
+    pub warnings: Vec<ParseWarning>,
+}
+
+pub(crate) fn load_excel_with_policy(
+    path: &Path,
+    rows: RowSelect,
+    sheet: Option<&str>,
+    selected_columns: Option<&[String]>,
+    strict: bool,
+) -> Result<ExcelLoaded> {
     let mut workbook = open_workbook_auto(path).map_err(|err| Error::parse(path, err))?;
     let names: Vec<String> = workbook
         .sheet_names()
@@ -107,17 +125,76 @@ pub fn load_excel(
         .collect();
 
     let mut columns = Vec::with_capacity(width);
+    let mut warnings = Vec::new();
     for (col, name) in headers.iter().enumerate() {
         let cells: Vec<&Data> = data_rows
             .iter()
             .map(|row| row.get(col).unwrap_or(&Data::Empty))
             .collect();
+        let selected = selected_columns.is_none_or(|names| names.contains(name));
+        let count = cells
+            .iter()
+            .filter(|cell| matches!(cell, Data::Error(_)))
+            .count();
+        if selected && count > 0 {
+            let noun = if count == 1 { "cell" } else { "cells" };
+            let (position, error) = cells
+                .iter()
+                .enumerate()
+                .find_map(|(i, cell)| {
+                    if let Data::Error(error) = cell {
+                        Some((i, error))
+                    } else {
+                        None
+                    }
+                })
+                .expect("count > 0 establishes an error cell");
+            let (start_row, start_col) = range.start().unwrap_or((0, 0));
+            let address = cell_address(
+                start_row as usize + indexes[position] + 1,
+                start_col as usize + col,
+            );
+            if strict {
+                return Err(Error::new(format!(
+                    "found {count} Excel error {noun}.\n\n  File: {}\n  Sheet: {}\n  Column: {}\n  Cell: {address} ({error})\n\nNo profile was created. Fix the cell in Excel, then save the workbook and try again.",
+                    path.display(), sheet_name.escape_debug(), name.escape_debug()
+                )).with_tolerant_retry());
+            }
+            warnings.push(ParseWarning {
+                code: "excel_cell_errors",
+                message: format!(
+                    "Profile created with {count} Excel error {noun} counted as missing in column '{}' (sheet '{}', first at {address}: {error}). Fix the cell in Excel, then save the workbook and try again.",
+                    name.escape_debug(), sheet_name.escape_debug()
+                ),
+                column: Some(name.clone()),
+                count: Some(count),
+            });
+        }
         columns.push(column_from_cells(name, &cells)?);
     }
 
     let df = DataFrame::new(columns)
         .map_err(|err| Error::new(format!("could not build sheet '{sheet_name}': {err}")))?;
-    Ok((df, outcome, sheet_name))
+    Ok(ExcelLoaded {
+        df,
+        outcome,
+        sheet: sheet_name,
+        warnings,
+    })
+}
+
+fn cell_address(row: usize, column: usize) -> String {
+    let mut column = column + 1;
+    let mut letters = Vec::new();
+    while column > 0 {
+        letters.push((b'A' + ((column - 1) % 26) as u8) as char);
+        column = (column - 1) / 26;
+    }
+    format!(
+        "{}{row}",
+        letters.into_iter().rev().collect::<String>(),
+        row = row + 1
+    )
 }
 
 fn select_rows(n_data: usize, rows: RowSelect) -> (Vec<usize>, ReadOutcome) {
