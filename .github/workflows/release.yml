@@ -54,11 +54,13 @@ jobs:
             cp "target/${target}/release/datapeek.exe" "dist/${stage}/datapeek.exe"
             # bsdtar on the Windows runner writes a zip with forward-slash entries.
             tar -a -cf "dist/${stage}.zip" -C dist "${stage}"
-            tar -tf "dist/${stage}.zip" | grep -q "${stage}/datapeek.exe"
+            # Read the full listing. grep -q exits early; GNU tar then fails the
+            # pipe with "stdout: write error" (exit 2) under pipefail.
+            tar -tf "dist/${stage}.zip" | grep -F "${stage}/datapeek.exe" >/dev/null
           else
             cp "target/${target}/release/datapeek" "dist/${stage}/datapeek"
             tar -C dist -czf "dist/${stage}.tar.gz" "${stage}"
-            tar -tzf "dist/${stage}.tar.gz" | grep -qx "${stage}/datapeek"
+            tar -tzf "dist/${stage}.tar.gz" | grep -x "${stage}/datapeek" >/dev/null
           fi
           rm -rf "dist/${stage}"
 
