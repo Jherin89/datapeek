@@ -2,7 +2,7 @@
 name = "datapeek"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.89"
 authors = ["Jordan Herin"]
 license = "MIT"
 description = "Instant data-file profiler for CSV, TSV, and Parquet"
@@ -29,12 +29,6 @@ polars = { version = "0.46", default-features = false, features = [
 ] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
-# Transitive pins so this crate still builds on rustc 1.85 (latest patches want 1.88+).
-encoding_rs = "=0.8.35"
-home = "=0.5.11"
-psm = "=0.1.21"
-uuid = { version = "=1.16.0", default-features = false }
 
 [dev-dependencies]
 serde_json = "1"
