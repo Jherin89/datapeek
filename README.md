@@ -20,6 +20,7 @@ values, and a sparkline.
 - A column profile in one command, with no notebook and no Python environment.
 - CSV, TSV, semicolon- and pipe-delimited text, Parquet, JSON Lines, and Excel (`.xlsx`, `.xlsm`, `.xls`, `.xlsb`).
 - `--sheet` to pick an Excel sheet by name or by 0-based index.
+- A totals panel at the top: rows, columns, cells, and how many cells are filled.
 - A colored terminal table, plus `--json` for scripts.
 - `--columns` to focus a profile.
 - `--sample N` draws a uniform random sample of N rows from the whole file. `--seed` repeats that draw. `--head N` is the fast first-N scan.
@@ -264,13 +265,18 @@ The repo includes small files in [`samples/`](samples/): `orders.csv`,
 datapeek samples/orders.csv
 ```
 
-On a terminal, the table is colored: types are tinted, missingness turns
-yellow at 5% and red at 20%, and sparklines are cyan. The text form of that
-profile is:
+On a terminal, the totals panel and the table are colored. Row and column
+counts are cyan. Filled turns green at 95%, yellow from 80%, and red below
+that. In the table, types are tinted, missingness turns yellow at 5% and red
+at 20%, and sparklines are cyan. The text form of that profile is:
 
 ```
+  ┌─ Rows ─────┐ ┌─ Columns ──┐ ┌─ Cells ────┐ ┌─ Filled ───┐
+  │     24     │ │     7      │ │    168     │ │    148     │
+  │            │ │            │ │            │ │   88.1%    │
+  └────────────┘ └────────────┘ └────────────┘ └────────────┘
+
   datapeek  samples/orders.csv
-  24 rows × 7 columns
 
   column      type     miss   min         max         distinct  top values                                  dist
   ──────────  ───────  ─────  ──────────  ──────────  ────────  ──────────────────────────────────────────  ────────
@@ -283,13 +289,45 @@ profile is:
   note        text     75.0%  gift wrap   wait        5         rush 8.3% · gift wrap 8.3% · hold 4.2%
 ```
 
-The header is the file path and the row × column shape. A full read says
-`24 rows × 7 columns`. `--head 5` says `first 5 rows × 7 columns`.
-`--sample 5 --seed 1` says `random sample of 5 rows (seed 1) × 7 columns`
-(the seed phrase is omitted when you do not pass `--seed`). An Excel profile
-prefixes the sheet name: `sheet Orders · 24 rows × 7 columns`. When the
-requested row count covers the whole file, the shape line is the full-read
-form and `mode` in the JSON is `full`.
+The panel is the shape of the profiled data. **Rows** and **Columns** are the
+profiled frame. **Cells** is rows × columns. **Filled** is the cells that
+are not null and not an empty string, with that count as a percent of cells.
+`orders.csv` has 168 cells and 20 missing (2 in `amount`, 18 in `note`), so
+148 are filled (88.1%). An empty table (0 rows or 0 columns) shows 0 cells
+and 0% filled.
+
+A cell is missing when it is null or `""`. That is the same rule as the
+**miss** column: filled cells equal cells minus the sum of the per-column
+missing counts. CSV and TSV empty fields, quoted `""`, JSON Lines `""`,
+Excel empty cells and empty-string cells, and Parquet empty strings all
+count. A value that is only whitespace, such as `" "`, is data.
+
+Under the panel is the file path. An Excel profile adds the sheet on the
+next line (`sheet Orders`). `--head` and `--sample` name the rows they
+actually profiled. `--head 5` says `Profiled · first 5 rows` and labels the
+first card **First rows**. `--sample 5 --seed 1` says
+`Profiled · random sample of 5 rows (seed 1) · of 24 rows` and labels the
+first card **Sampled rows**, with `of 24` under the count. The seed phrase
+is omitted when you do not pass `--seed`. The file total (`of 24`) appears
+when datapeek already knew it: a Parquet footer, the rows a random sample
+streamed, or an Excel sheet already in memory. `--head` on CSV or JSON
+Lines does not walk the rest of the file just to count it, so that total
+is left out. When the requested row count covers the whole file, the panel
+is the full-read form and `mode` in the JSON is `full`.
+
+The cards use the terminal width, or `COLUMNS` when stdout is not a
+terminal, or 80 when neither is known. If the boxes would wrap, datapeek
+prints stacked lines instead:
+
+```
+  Rows     24
+  Columns  7
+  Cells    168
+  Filled   148 (88.1%)
+```
+
+`NO_COLOR`, and any run whose stdout is not a terminal, prints the same
+text without color.
 
 The other samples:
 
@@ -306,7 +344,7 @@ datapeek samples/orders.xlsx
 | --- | --- |
 | **column** | Field name from the header, the Parquet/JSON schema, or the first row of an Excel sheet. |
 | **type** | `integer`, `decimal`, `date`, `bool`, or `text`. |
-| **miss** | Percent of rows that are null or empty. `0%` when nothing is missing, `<0.1%` for a tiny share, one decimal otherwise. |
+| **miss** | Percent of profiled rows that are null or an empty string. Whitespace-only text is data. `0%` when nothing is missing, `<0.1%` for a tiny share, one decimal otherwise. |
 | **min / max** | Range. Text is lexicographic. The table prints thousands separators (`1,001`). `--json` emits numeric bounds as JSON numbers (`1001`). |
 | **distinct** | Number of unique values, including a single null bucket when nulls are present. |
 | **top values** | Up to three most common values, with each value's share of all rows. `—` when the column is empty or every non-null value is unique and there are more than three of them. Long values are truncated with `…`. |
@@ -330,19 +368,25 @@ datapeek [OPTIONS] <FILE>
 | `--head <N>` | Profile the first N rows and stop scanning. Cannot be combined with `--sample`. |
 | `--sheet <NAME\|INDEX>` | Excel sheet to profile. An exact sheet name wins, even when that name is numeric. Otherwise a value that parses as an integer is a 0-based index (`01` is index 1). The default is the first sheet. On a non-Excel file this flag is an error. |
 | `-h, --help` | Print help. |
-| `-V, --version` | Print `datapeek 0.2.0`. |
+| `-V, --version` | Print `datapeek 0.3.0`. |
 
 **`--json`.** Same profile as the table. Numeric min/max are raw JSON numbers.
 `histogram` and `sparkline` are present only for numeric and date columns.
-`mode` is `full`, `head`, or `random`. `seed` is the `--seed` value, or
-`null` when you did not pass one. `sampled` is true only for a strict subset
-(`head` or `random`). `sample_limit` is the N you asked for, and it is
-omitted when the profile covers the whole file. `sheet` is present for Excel.
-`warnings` is present only when parsing problems were tolerated. Each warning
-has a stable `code` and a `message`, with a `column` when available. Excel
-warnings also have an exact error-cell `count`. CSV warnings omit the count
-because the reader does not expose it. Warnings also appear on stderr,
-leaving stdout as valid JSON.
+`rows` and `columns` are the profiled frame. `cells` is `rows * columns`
+(0 when either side is 0). `filled_cells` counts cells that are not null and
+not `""`. `filled_pct` is `100 * filled_cells / cells`, the same full-precision
+ratio as `missing_pct`, or `0` when there are no cells. `file_rows` is the
+row count of the whole file when that number was already known, and `null`
+when it was not (a CSV or JSON Lines `--head`). `mode` is `full`, `head`, or
+`random`. `seed` is the `--seed` value, or `null` when you did not pass one.
+`sampled` is true only for a strict subset (`head` or `random`).
+`sample_limit` is the N you asked for, and it is omitted when the profile
+covers the whole file. `sheet` is present for Excel. `warnings` is present
+only when parsing problems were tolerated. Each warning has a stable `code`
+and a `message`, with a `column` when available. Excel warnings also have an
+exact error-cell `count`. CSV warnings omit the count because the reader
+does not expose it. Warnings also appear on stderr, leaving stdout as valid
+JSON.
 
 ```bash
 datapeek --json samples/orders.csv
@@ -358,6 +402,10 @@ Full pretty-printed output of that command:
   "file": "samples/orders.csv",
   "rows": 24,
   "columns": 7,
+  "cells": 168,
+  "filled_cells": 148,
+  "filled_pct": 88.0952380952381,
+  "file_rows": 24,
   "sampled": false,
   "mode": "full",
   "seed": null,
@@ -567,8 +615,12 @@ datapeek --columns customer,amount samples/orders.csv
 ```
 
 ```
+  ┌─ Rows ─────┐ ┌─ Columns ──┐ ┌─ Cells ────┐ ┌─ Filled ───┐
+  │     24     │ │     2      │ │     48     │ │     46     │
+  │            │ │            │ │            │ │   95.8%    │
+  └────────────┘ └────────────┘ └────────────┘ └────────────┘
+
   datapeek  samples/orders.csv
-  24 rows × 2 columns
 
   column    type     miss  min   max       distinct  top values                                 dist
   ────────  ───────  ────  ────  ────────  ────────  ─────────────────────────────────────────  ────────
@@ -580,16 +632,22 @@ datapeek --columns customer,amount samples/orders.csv
 The first sheet is the default. The first row is the header. Cells become
 integers, decimals, bools, or dates. An Excel date with a time of day is a
 datetime (still reported as `date`, with `YYYY-MM-DD HH:MM:SS` bounds). A
-column that mixes those types falls back to text. Empty cells are null.
-`samples/orders.xlsx` sheet `Orders` matches `samples/orders.csv`:
+column that mixes those types falls back to text. Empty cells and empty
+strings are null. `samples/orders.xlsx` sheet `Orders` matches
+`samples/orders.csv`:
 
 ```bash
 datapeek samples/orders.xlsx
 ```
 
 ```
+  ┌─ Rows ─────┐ ┌─ Columns ──┐ ┌─ Cells ────┐ ┌─ Filled ───┐
+  │     24     │ │     7      │ │    168     │ │    148     │
+  │            │ │            │ │            │ │   88.1%    │
+  └────────────┘ └────────────┘ └────────────┘ └────────────┘
+
   datapeek  samples/orders.xlsx
-  sheet Orders · 24 rows × 7 columns
+  sheet Orders
 
   column      type     miss   min         max         distinct  top values                                  dist
   ──────────  ───────  ─────  ──────────  ──────────  ────────  ──────────────────────────────────────────  ────────
@@ -613,8 +671,13 @@ datapeek --sheet 1 samples/orders.xlsx
 ```
 
 ```
+  ┌─ Rows ─────┐ ┌─ Columns ──┐ ┌─ Cells ────┐ ┌─ Filled ───┐
+  │     3      │ │     5      │ │     15     │ │     14     │
+  │            │ │            │ │            │ │   93.3%    │
+  └────────────┘ └────────────┘ └────────────┘ └────────────┘
+
   datapeek  samples/orders.xlsx
-  sheet Returns · 3 rows × 5 columns
+  sheet Returns
 
   column       type     miss   min                  max                  distinct  top values                                  dist
   ───────────  ───────  ─────  ───────────────────  ───────────────────  ────────  ──────────────────────────────────────────  ────────
@@ -632,18 +695,25 @@ one cell is empty (33.3% missing). `received_at` keeps the time of day.
 they work on a text file.
 
 **`--sample`.** A uniform draw of N rows from the whole file, not a prefix.
-Pass `--seed` when you want the same rows again. The header names the mode
-and, when you passed one, the seed. On `orders.csv` the ids are sorted, so a
-sample of 5 with seed 1 is not the first five orders (`order_id` runs
-1,007–1,022 here, not 1,001–1,005):
+Pass `--seed` when you want the same rows again. The panel names the mode
+and, when you passed one, the seed. The row card is the sample size, and
+`of 24` is the file, because the sampler already counted every row. On
+`orders.csv` the ids are sorted, so a sample of 5 with seed 1 is not the
+first five orders (`order_id` runs 1,007–1,022 here, not 1,001–1,005):
 
 ```bash
 datapeek --sample 5 --seed 1 samples/orders.csv
 ```
 
 ```
+  Profiled · random sample of 5 rows (seed 1) · of 24 rows
+  ┌─ Sampled rows ─┐ ┌─ Columns ──────┐ ┌─ Cells ────────┐ ┌─ Filled ───────┐
+  │       5        │ │       7        │ │       35       │ │       31       │
+  │     of 24      │ │                │ │                │ │     88.6%      │
+  └────────────────┘ └────────────────┘ └────────────────┘ └────────────────┘
+
   datapeek  samples/orders.csv
-  random sample of 5 rows (seed 1) × 7 columns
+  random sample of 5 rows (seed 1) · of 24 rows
 
   column      type     miss   min         max         distinct  top values                                  dist
   ──────────  ───────  ─────  ──────────  ──────────  ────────  ──────────────────────────────────────────  ────────
@@ -657,20 +727,29 @@ datapeek --sample 5 --seed 1 samples/orders.csv
 ```
 
 The JSON for that command sets `"sampled": true`, `"sample_limit": 5`,
-`"mode": "random"`, and `"seed": 1`. If N is at least the number of rows,
-every row is used, `sampled` is false, `sample_limit` is omitted, and `mode`
-is `full`.
+`"mode": "random"`, `"seed": 1`, and `"file_rows": 24`. `rows` stays 5,
+the rows that were profiled. If N is at least the number of rows, every row
+is used, `sampled` is false, `sample_limit` is omitted, and `mode` is
+`full`.
 
 **`--head`.** The fast prefix. Scanning stops after N rows. Same file, first
-five rows:
+five rows. The panel says these are the first 5 rows. A CSV prefix leaves
+the file total out, because counting the rest of the file would be another
+pass:
 
 ```bash
 datapeek --head 5 samples/orders.csv
 ```
 
 ```
+  Profiled · first 5 rows
+  ┌─ First rows ─┐ ┌─ Columns ────┐ ┌─ Cells ──────┐ ┌─ Filled ─────┐
+  │      5       │ │      7       │ │      35      │ │      31      │
+  │              │ │              │ │              │ │    88.6%     │
+  └──────────────┘ └──────────────┘ └──────────────┘ └──────────────┘
+
   datapeek  samples/orders.csv
-  first 5 rows × 7 columns
+  first 5 rows
 
   column      type     miss   min         max         distinct  top values                                  dist
   ──────────  ───────  ─────  ──────────  ──────────  ────────  ──────────────────────────────────────────  ────────
@@ -845,9 +924,9 @@ columns of CSV (about 91 MiB) and is not in the repo.
 
 | Command | Median | The three runs |
 | --- | --- | --- |
-| `datapeek bench-2m.csv` | **0.59 s** | 0.587 s, 0.600 s, 0.561 s |
-| `datapeek --sample 100000 --seed 1 bench-2m.csv` | **0.47 s** | 0.467 s, 0.583 s, 0.472 s |
-| `datapeek --head 100000 bench-2m.csv` | **0.22 s** | 0.217 s, 0.220 s, 0.261 s |
+| `datapeek bench-2m.csv` | **0.59 s** | 0.583 s, 0.590 s, 0.613 s |
+| `datapeek --sample 100000 --seed 1 bench-2m.csv` | **0.50 s** | 0.503 s, 0.498 s, 0.498 s |
+| `datapeek --head 100000 bench-2m.csv` | **0.24 s** | 0.244 s, 0.231 s, 0.239 s |
 
 v0.1 measured 0.67 s for a full profile of the same shape, and 0.17 s when
 `--sample` still meant the first 100,000 rows. The full-file path is still
@@ -856,18 +935,23 @@ that lazy scan.
 ## How it works
 
 Polars infers a schema from CSV, TSV, Parquet, and JSON Lines. String columns
-get an extra pass so dates and bools are not left as text. Missingness,
-min/max, and distinct counts are vectorized aggregations. Top values come
-from `value_counts`. Numeric and date histograms are an 8-bin pass used only
-to draw the sparkline.
+get an extra pass so dates and bools are not left as text. Before those
+stats, an empty string is turned into null, so missingness, min/max, distinct
+counts, top values, and the filled total agree. Columns with no `""` skip
+that copy. Whitespace-only text stays. Missingness, min/max, and distinct
+counts are vectorized aggregations. Top values come from `value_counts`.
+Numeric and date histograms are an 8-bin pass used only to draw the
+sparkline. Filled cells are the profiled cells minus the sum of those
+per-column missing counts.
 
 Excel is read with [calamine](https://github.com/tafia/calamine). The chosen
-sheet is already in memory, so sampling picks row indexes out of that sheet.
-Each column is typed from its cells. Whole numbers (including integral Excel
-floats) become integers, other finite numbers become decimals, and bools stay
-bools. A midnight Excel date stays a date. Any other time of day becomes a
-datetime. Both are shown as `date`. A column that mixes incompatible types
-becomes text. Empty cells and error cells are null.
+sheet is already in memory, so sampling picks row indexes out of that sheet
+and the file row count is known without another pass. Each column is typed
+from its cells. Whole numbers (including integral Excel floats) become
+integers, other finite numbers become decimals, and bools stay bools. A
+midnight Excel date stays a date. Any other time of day becomes a datetime.
+Both are shown as `date`. A column that mixes incompatible types becomes
+text. Empty cells, empty strings, and error cells are null.
 
 `--sample` uses reservoir sampling (Algorithm R, seeded with `rand`'s
 StdRng). CSV keeps the sampled records and parses only those rows with the

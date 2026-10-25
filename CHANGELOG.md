@@ -5,13 +5,19 @@ All notable changes to datapeek are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-10-24
 
 ### Added
 
+- A totals panel at the top of the terminal profile: rows, columns, cells, and filled cells (count and percent). Thousands separators match the table. A partial read labels the panel as the profiled rows and, when the file total was already known, shows that count too. Narrow terminals fall back to stacked lines so the box does not wrap. `NO_COLOR` and piped output stay plain and readable.
+- JSON fields `cells`, `filled_cells`, `filled_pct`, and `file_rows`. `file_rows` is the file's row count when a full read, a Parquet footer, a random sample, or an in-memory Excel sheet already had it, and `null` for a CSV or JSON Lines `--head`.
 - `--strict` rejects CSV/TSV parsing errors and Excel error cells without writing a profile.
 - Parsing errors explain the affected column and value; Excel errors identify the worksheet cell. Strict failures offer a command to profile the same input with tolerated errors. `--verbose` exposes technical CSV parser details.
 - Tolerated parsing problems produce stderr warnings and a structured JSON `warnings` field. Excel warnings count error cells per selected column; missingness continues to include them.
+
+### Changed
+
+- Empty strings count as missing everywhere: CSV and TSV fields, JSON Lines `""`, Excel empty cells and empty-string cells, and Parquet empty strings. The miss column and the filled total use that same count. Whitespace-only text is still data.
 
 ### Fixed
 
