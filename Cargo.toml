@@ -1,6 +1,6 @@
 [package]
 name = "datapeek"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.89"
 authors = ["Jordan Herin"]
@@ -32,6 +32,7 @@ polars = { version = "0.46", default-features = false, features = [
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+terminal_size = "0.4"
 
 [dev-dependencies]
 rust_xlsxwriter = "0.99"

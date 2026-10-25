@@ -29,7 +29,7 @@ fn profiles_csv_sample() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("datapeek"));
-    assert!(stdout.contains("rows"));
+    assert!(stdout.contains("Rows"));
     assert!(stdout.contains("order_id"));
     assert!(stdout.contains("integer"));
     assert!(stdout.contains("amount"));
@@ -324,13 +324,13 @@ fn sample_and_head_differ_on_sorted_column() {
     assert_ne!(sample["profile"][0]["max"], 10);
     let head_table = run(&["--head", "10", shown]);
     let text = String::from_utf8_lossy(&head_table.stdout);
-    assert!(text.contains("first 10 rows × 1 columns"), "{text}");
+    assert!(text.contains("first 10 rows"), "{text}");
+    assert!(text.contains("First rows"), "{text}");
+    assert!(!text.contains("of 500"), "{text}");
     let sample_table = run(&["--sample", "10", "--seed", "1", shown]);
     let text = String::from_utf8_lossy(&sample_table.stdout);
-    assert!(
-        text.contains("random sample of 10 rows (seed 1) × 1 columns"),
-        "{text}"
-    );
+    assert!(text.contains("random sample of 10 rows (seed 1)"), "{text}");
+    assert!(text.contains("of 500"), "{text}");
 }
 
 #[test]
@@ -408,7 +408,8 @@ fn profiles_excel_default_sheet() {
     let table_out = run(&[path.to_str().unwrap()]);
     let table = String::from_utf8_lossy(&table_out.stdout);
     assert!(table.contains("sheet Orders"), "{table}");
-    assert!(table.contains("24 rows × 7 columns"), "{table}");
+    assert!(table.contains("Rows"), "{table}");
+    assert!(table.contains("168"), "{table}");
 }
 
 #[test]
@@ -879,4 +880,304 @@ fn excel_errors_show_absolute_cell_addresses_for_offset_tables() {
     let out = run(&["--strict", path.to_str().unwrap()]);
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("Cell: AD12 (#DIV/0!)"));
+}
+
+fn assert_totals(v: &serde_json::Value) {
+    let rows = v["rows"].as_u64().unwrap();
+    let cols = v["columns"].as_u64().unwrap();
+    let cells = v["cells"].as_u64().unwrap();
+    let filled = v["filled_cells"].as_u64().unwrap();
+    assert_eq!(cells, rows * cols);
+    let missing: u64 = v["profile"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|col| {
+            let pct = col["missing_pct"].as_f64().unwrap();
+            if rows == 0 {
+                0
+            } else {
+                (pct / 100.0 * rows as f64).round() as u64
+            }
+        })
+        .sum();
+    assert_eq!(filled + missing, cells, "{v}");
+    let pct = v["filled_pct"].as_f64().unwrap();
+    if cells == 0 {
+        assert_eq!(pct, 0.0);
+    } else {
+        let expected = 100.0 * filled as f64 / cells as f64;
+        assert!((pct - expected).abs() < 1e-6, "{pct} vs {expected}");
+    }
+    assert!(v.get("file_rows").is_some());
+}
+
+#[test]
+fn dataset_totals_in_json_and_panel() {
+    let csv = sample("orders.csv");
+    let wide = Command::new(bin())
+        .args([csv.to_str().unwrap()])
+        .env("COLUMNS", "120")
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    assert!(wide.status.success());
+    let text = String::from_utf8_lossy(&wide.stdout);
+    assert!(!text.contains('\u{1b}'), "{text}");
+    assert!(text.contains('┌'), "{text}");
+    assert!(text.contains("Rows"), "{text}");
+    assert!(text.contains("Columns"), "{text}");
+    assert!(text.contains("Cells"), "{text}");
+    assert!(text.contains("Filled"), "{text}");
+    assert!(text.contains("168"), "{text}");
+    let rows_at = text.find("Rows").unwrap();
+    assert!(rows_at < text.find("orders.csv").unwrap(), "{text}");
+    for line in text.lines() {
+        if line.contains('┌') || line.contains('│') || line.contains('└') {
+            assert!(line.chars().count() <= 120, "{line}");
+        }
+    }
+
+    let narrow = Command::new(bin())
+        .args([csv.to_str().unwrap()])
+        .env("COLUMNS", "32")
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    let narrow_text = String::from_utf8_lossy(&narrow.stdout);
+    assert!(!narrow_text.contains('┌'), "{narrow_text}");
+    assert!(!narrow_text.contains('│'), "{narrow_text}");
+    assert!(narrow_text.contains("Rows"), "{narrow_text}");
+    assert!(narrow_text.contains("168"), "{narrow_text}");
+    assert!(!narrow_text.contains('\u{1b}'), "{narrow_text}");
+
+    let json = run(&["--json", csv.to_str().unwrap()]);
+    let v: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(v["rows"], 24);
+    assert_eq!(v["columns"], 7);
+    assert_eq!(v["cells"], 168);
+    assert_eq!(v["filled_cells"], 148);
+    assert_eq!(v["file_rows"], 24);
+    assert_totals(&v);
+
+    let xlsx = run(&["--json", sample("orders.xlsx").to_str().unwrap()]);
+    let xlsx: serde_json::Value = serde_json::from_slice(&xlsx.stdout).unwrap();
+    assert_eq!(xlsx["cells"], v["cells"]);
+    assert_eq!(xlsx["filled_cells"], v["filled_cells"]);
+    assert_eq!(xlsx["file_rows"], 24);
+    assert_eq!(xlsx["sheet"], "Orders");
+    assert_totals(&xlsx);
+    let table = Command::new(bin())
+        .args([sample("orders.xlsx").to_str().unwrap()])
+        .env("COLUMNS", "120")
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    let table = String::from_utf8_lossy(&table.stdout);
+    assert!(table.contains("sheet Orders"), "{table}");
+    assert!(table.contains('┌'), "{table}");
+    assert!(table.find("Rows").unwrap() < table.find("orders.xlsx").unwrap());
+}
+
+#[test]
+fn empty_strings_header_only_and_file_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let csv = dir.path().join("blanks.csv");
+    fs::write(&csv, "s,n\na,1\n\"\",\n,3\n\" \",4\n").unwrap();
+    let out = run(&["--json", csv.to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(column(&v, "s")["missing_pct"], 50.0);
+    assert_ne!(column(&v, "s")["min"], "");
+    assert!(column(&v, "s")["top_values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|value| !value["value"].as_str().unwrap().is_empty()));
+    assert_eq!(v["cells"], 8);
+    assert_eq!(v["filled_cells"], 5);
+    assert_totals(&v);
+    let table = Command::new(bin())
+        .args([csv.to_str().unwrap()])
+        .env("COLUMNS", "100")
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    let table = String::from_utf8_lossy(&table.stdout);
+    assert!(table.contains("Filled"), "{table}");
+    assert!(table.contains('5'), "{table}");
+
+    let header = dir.path().join("header.csv");
+    fs::write(&header, "a,b\n").unwrap();
+    let out = run(&["--json", header.to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["rows"], 0);
+    assert_eq!(v["columns"], 2);
+    assert_eq!(v["cells"], 0);
+    assert_eq!(v["filled_cells"], 0);
+    assert_eq!(v["filled_pct"], 0.0);
+    assert_eq!(v["file_rows"], 0);
+    assert_totals(&v);
+
+    let mut lines = String::new();
+    for i in 0..30 {
+        lines.push_str(&format!(
+            "{{\"s\":\"{}\"}}\n",
+            if i % 2 == 0 { "" } else { "x" }
+        ));
+    }
+    let jsonl = dir.path().join("empty.jsonl");
+    fs::write(&jsonl, lines).unwrap();
+    let out = run(&["--json", jsonl.to_str().unwrap()]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(column(&v, "s")["missing_pct"], 50.0);
+    assert_eq!(v["filled_cells"], 15);
+    assert_totals(&v);
+
+    use polars::prelude::*;
+    let mut frame = DataFrame::new(vec![Series::new(
+        "s".into(),
+        &[Some("a"), Some(""), None, Some("b")],
+    )
+    .into()])
+    .unwrap();
+    let pq = dir.path().join("empty.parquet");
+    {
+        let mut file = fs::File::create(&pq).unwrap();
+        ParquetWriter::new(&mut file).finish(&mut frame).unwrap();
+    }
+    let out = run(&["--json", pq.to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(column(&v, "s")["missing_pct"], 50.0);
+    assert_ne!(column(&v, "s")["min"], "");
+    assert_eq!(v["filled_cells"], 2);
+    assert_totals(&v);
+
+    use rust_xlsxwriter::Workbook;
+    let xlsx = dir.path().join("empty.xlsx");
+    let mut workbook = Workbook::new();
+    let sheet = workbook.add_worksheet();
+    sheet.write_string(0, 0, "s").unwrap();
+    sheet.write_string(1, 0, "a").unwrap();
+    sheet.write_string(2, 0, "").unwrap();
+    sheet.write_string(4, 0, " ").unwrap();
+    workbook.save(&xlsx).unwrap();
+    let out = run(&["--json", xlsx.to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    // Rows: "a", an empty string, a blank cell inside the used range, and " ".
+    // The empty string and the blank cell are missing. Whitespace counts.
+    assert_eq!(v["rows"], 4);
+    assert_eq!(column(&v, "s")["missing_pct"], 50.0);
+    assert_eq!(column(&v, "s")["min"], " ");
+    assert_eq!(v["filled_cells"], 2);
+    assert_eq!(v["file_rows"], 4);
+    assert_totals(&v);
+
+    let orders = sample("orders.csv");
+    let head = run(&["--json", "--head", "5", orders.to_str().unwrap()]);
+    let head: serde_json::Value = serde_json::from_slice(&head.stdout).unwrap();
+    assert_eq!(head["mode"], "head");
+    assert_eq!(head["rows"], 5);
+    assert!(head["file_rows"].is_null());
+    assert_eq!(head["cells"], 35);
+    assert_totals(&head);
+    let head_table = Command::new(bin())
+        .args(["--head", "5", orders.to_str().unwrap()])
+        .env("COLUMNS", "100")
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    let head_table = String::from_utf8_lossy(&head_table.stdout);
+    assert!(
+        head_table.contains("Profiled · first 5 rows"),
+        "{head_table}"
+    );
+    assert!(!head_table.contains("of 24"), "{head_table}");
+
+    let sampled = run(&[
+        "--json",
+        "--sample",
+        "5",
+        "--seed",
+        "1",
+        orders.to_str().unwrap(),
+    ]);
+    let sampled: serde_json::Value = serde_json::from_slice(&sampled.stdout).unwrap();
+    assert_eq!(sampled["mode"], "random");
+    assert_eq!(sampled["seed"], 1);
+    assert_eq!(sampled["file_rows"], 24);
+    assert_eq!(sampled["rows"], 5);
+    assert_totals(&sampled);
+    let sample_table = Command::new(bin())
+        .args(["--sample", "5", "--seed", "1", orders.to_str().unwrap()])
+        .env("COLUMNS", "120")
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    let sample_table = String::from_utf8_lossy(&sample_table.stdout);
+    assert!(
+        sample_table.contains("random sample of 5 rows (seed 1)"),
+        "{sample_table}"
+    );
+    assert!(sample_table.contains("of 24"), "{sample_table}");
+
+    let xlsx_orders = sample("orders.xlsx");
+    let head = run(&["--json", "--head", "5", xlsx_orders.to_str().unwrap()]);
+    let head: serde_json::Value = serde_json::from_slice(&head.stdout).unwrap();
+    assert_eq!(head["file_rows"], 24);
+    assert_eq!(head["rows"], 5);
+    assert_totals(&head);
+
+    let mut frame = DataFrame::new(vec![
+        Series::new("n".into(), (0..50).collect::<Vec<i64>>()).into()
+    ])
+    .unwrap();
+    let pq = dir.path().join("rows.parquet");
+    {
+        let mut file = fs::File::create(&pq).unwrap();
+        ParquetWriter::new(&mut file).finish(&mut frame).unwrap();
+    }
+    let head = run(&["--json", "--head", "10", pq.to_str().unwrap()]);
+    assert!(
+        head.status.success(),
+        "{}",
+        String::from_utf8_lossy(&head.stderr)
+    );
+    let head: serde_json::Value = serde_json::from_slice(&head.stdout).unwrap();
+    assert_eq!(head["mode"], "head");
+    assert_eq!(head["rows"], 10);
+    assert_eq!(head["file_rows"], 50);
+    assert_totals(&head);
+    let sample = run(&[
+        "--json",
+        "--sample",
+        "10",
+        "--seed",
+        "3",
+        pq.to_str().unwrap(),
+    ]);
+    let sample: serde_json::Value = serde_json::from_slice(&sample.stdout).unwrap();
+    assert_eq!(sample["mode"], "random");
+    assert_eq!(sample["file_rows"], 50);
+    assert_eq!(sample["rows"], 10);
+    assert_totals(&sample);
 }

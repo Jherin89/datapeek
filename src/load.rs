@@ -64,6 +64,10 @@ pub struct ReadOutcome {
     pub mode: ReadMode,
     pub seed: Option<u64>,
     pub limit: Option<usize>,
+    /// Data rows in the file when that count was already known. `None` for a
+    /// CSV/JSONL `--head` that stopped early: counting the rest would be a
+    /// second pass.
+    pub file_rows: Option<usize>,
 }
 
 impl ReadOutcome {
@@ -72,6 +76,7 @@ impl ReadOutcome {
             mode: ReadMode::Full,
             seed: None,
             limit: None,
+            file_rows: None,
         }
     }
 
@@ -80,6 +85,7 @@ impl ReadOutcome {
             mode: ReadMode::Head,
             seed: None,
             limit: Some(n),
+            file_rows: None,
         }
     }
 
@@ -88,7 +94,13 @@ impl ReadOutcome {
             mode: ReadMode::Random,
             seed,
             limit: Some(n),
+            file_rows: None,
         }
+    }
+
+    pub fn with_file_rows(mut self, rows: usize) -> Self {
+        self.file_rows = Some(rows);
+        self
     }
 }
 
@@ -473,6 +485,7 @@ fn sample_csv(
     }
 
     reservoir.sort_unstable_by_key(|(idx, _)| *idx);
+    let file_rows = total;
     let mut buf = Vec::new();
     {
         let mut writer = csv::WriterBuilder::new()
@@ -492,7 +505,7 @@ fn sample_csv(
     let df = checked_csv(strict, warnings, |ignore| {
         parse_csv_bytes(path, sep, &buf, ignore)
     })?;
-    Ok((df, ReadOutcome::random(n, seed)))
+    Ok((df, ReadOutcome::random(n, seed).with_file_rows(file_rows)))
 }
 
 fn parse_csv_bytes(path: &Path, sep: u8, buf: &[u8], ignore_errors: bool) -> Result<DataFrame> {
@@ -518,8 +531,12 @@ fn load_parquet(
             Ok((df, ReadOutcome::full()))
         }
         RowSelect::Head(n) => {
+            // Footer metadata already knows the row count. The scan itself
+            // still stops after the requested prefix.
+            let (total, _) = parquet_layout(path)?;
             let df = scan_parquet(path, None, Some(n + 1))?;
-            Ok(trim_head(df, n))
+            let (df, outcome) = trim_head(df, n);
+            Ok((df, outcome.with_file_rows(total)))
         }
         RowSelect::Sample { n, seed } => sample_parquet(path, columns, n, seed),
     }
@@ -562,7 +579,7 @@ fn sample_parquet(
     let (total, spans) = parquet_layout(path)?;
     if n >= total {
         let df = scan_parquet(path, columns, None)?;
-        return Ok((df, ReadOutcome::full()));
+        return Ok((df, ReadOutcome::full().with_file_rows(total)));
     }
     if let Some(wanted) = columns {
         let names = parquet_column_names(path)?;
@@ -603,7 +620,7 @@ fn sample_parquet(
         )));
     }
     let df = vstack_all(parts).map_err(|err| wrap_parse(path, err))?;
-    Ok((df, ReadOutcome::random(n, seed)))
+    Ok((df, ReadOutcome::random(n, seed).with_file_rows(total)))
 }
 
 fn parquet_layout(path: &Path) -> Result<(usize, Vec<(usize, usize)>)> {
@@ -713,9 +730,10 @@ fn sample_jsonl(path: &Path, n: usize, seed: Option<u64>) -> Result<(DataFrame, 
         return Ok((df, ReadOutcome::full()));
     }
     reservoir.sort_unstable_by_key(|(idx, _)| *idx);
+    let file_rows = total;
     let lines: Vec<String> = reservoir.into_iter().map(|(_, line)| line).collect();
     let df = dataframe_from_jsonl(path, &lines)?;
-    Ok((df, ReadOutcome::random(n, seed)))
+    Ok((df, ReadOutcome::random(n, seed).with_file_rows(file_rows)))
 }
 
 fn read_line_prefix(path: &Path, max_lines: usize) -> Result<Vec<String>> {

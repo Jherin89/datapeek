@@ -198,7 +198,8 @@ fn cell_address(row: usize, column: usize) -> String {
 }
 
 fn select_rows(n_data: usize, rows: RowSelect) -> (Vec<usize>, ReadOutcome) {
-    match rows {
+    // The sheet is already in memory, so the file row count is free.
+    let (indexes, outcome) = match rows {
         RowSelect::All => ((0..n_data).collect(), ReadOutcome::full()),
         RowSelect::Head(n) if n >= n_data => ((0..n_data).collect(), ReadOutcome::full()),
         RowSelect::Head(n) => ((0..n).collect(), ReadOutcome::head(n)),
@@ -207,7 +208,8 @@ fn select_rows(n_data: usize, rows: RowSelect) -> (Vec<usize>, ReadOutcome) {
             sample::sample_indices(n_data, n, seed),
             ReadOutcome::random(n, seed),
         ),
-    }
+    };
+    (indexes, outcome.with_file_rows(n_data))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

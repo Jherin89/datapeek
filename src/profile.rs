@@ -74,6 +74,10 @@ pub struct ColumnProfile {
     #[serde(rename = "type")]
     pub dtype: InferredType,
     pub missing_pct: f64,
+    /// Nulls plus empty strings. Omitted from JSON; `missing_pct` stays the
+    /// public per-column figure. Dataset totals are this count summed.
+    #[serde(skip)]
+    pub missing: usize,
     pub min: Option<StatValue>,
     pub max: Option<StatValue>,
     pub distinct: usize,
@@ -89,6 +93,15 @@ pub struct FileProfile {
     pub file: String,
     pub rows: usize,
     pub columns: usize,
+    /// `rows * columns` over the profiled frame. Zero when either side is zero.
+    pub cells: u64,
+    /// Cells that are not null and not empty strings.
+    pub filled_cells: u64,
+    /// `100 * filled_cells / cells`, or `0` when there are no cells.
+    pub filled_pct: f64,
+    /// Rows in the file when that number was already known. JSON `null` for a
+    /// CSV or JSON Lines `--head` that did not reach the end.
+    pub file_rows: Option<usize>,
     /// True when the profile covers a strict subset of the file.
     pub sampled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -141,15 +154,37 @@ pub fn profile_path(path: &Path, opts: &ProfileOptions<'_>) -> Result<FileProfil
 
 pub fn profile_loaded(path: &Path, loaded: load::Loaded) -> FileProfile {
     let rows = loaded.df.height();
-    let mut profile = Vec::with_capacity(loaded.df.width());
+    let columns = loaded.df.width();
+    let mut profile = Vec::with_capacity(columns);
+    let mut missing_cells: u64 = 0;
     for col in loaded.df.get_columns() {
-        profile.push(profile_column(col, rows));
+        let column = profile_column(col, rows);
+        missing_cells += column.missing as u64;
+        profile.push(column);
     }
+    let cells = (rows as u64).saturating_mul(columns as u64);
+    let filled_cells = cells.saturating_sub(missing_cells);
+    debug_assert_eq!(filled_cells + missing_cells, cells);
+    let filled_pct = if cells == 0 {
+        0.0
+    } else {
+        100.0 * filled_cells as f64 / cells as f64
+    };
     let outcome = loaded.outcome;
+    // A full read has seen every row. Partial reads keep a count only when the
+    // loader already had one (parquet footer, reservoir total, in-memory sheet).
+    let file_rows = outcome.file_rows.or(match outcome.mode {
+        ReadMode::Full => Some(rows),
+        ReadMode::Head | ReadMode::Random => None,
+    });
     FileProfile {
         file: path.display().to_string(),
         rows,
-        columns: loaded.df.width(),
+        columns,
+        cells,
+        filled_cells,
+        filled_pct,
+        file_rows,
         sampled: outcome.mode != ReadMode::Full,
         sample_limit: outcome.limit,
         mode: outcome.mode,
@@ -161,8 +196,32 @@ pub fn profile_loaded(path: &Path, loaded: load::Loaded) -> FileProfile {
     }
 }
 
+/// Turn empty strings into nulls so every later stat uses one missing rule.
+///
+/// Returns `None` when the column is not text or it has no `""` values, which
+/// is the common path (CSV empty fields are already null). The caller then
+/// profiles the original series. Filled cells are the sum of these missing
+/// counts; this does not scan the frame again.
+fn nullify_empty_strings(s: &Series) -> Option<Series> {
+    let ca = s.str().ok()?;
+    let has_empty = ca.iter().any(|value| matches!(value, Some("")));
+    if !has_empty {
+        return None;
+    }
+    let values: Vec<Option<&str>> = ca
+        .iter()
+        .map(|value| match value {
+            Some("") | None => None,
+            Some(value) => Some(value),
+        })
+        .collect();
+    Some(Series::new(s.name().to_string().into(), values))
+}
+
 fn profile_column(col: &Column, rows: usize) -> ColumnProfile {
-    let s = col.as_materialized_series();
+    let original = col.as_materialized_series();
+    let normalized = nullify_empty_strings(original);
+    let s = normalized.as_ref().unwrap_or(original);
     let name = s.name().to_string();
     let nulls = s.null_count();
     let missing_pct = if rows == 0 {
@@ -193,6 +252,7 @@ fn profile_column(col: &Column, rows: usize) -> ColumnProfile {
         name,
         dtype,
         missing_pct,
+        missing: nulls,
         min,
         max,
         distinct,
@@ -694,5 +754,228 @@ mod tests {
         .unwrap();
         assert_eq!(head.profile[0].max, Some(StatValue::Integer(14)));
         assert_ne!(once.profile[0].max, head.profile[0].max);
+    }
+
+    fn totals_agree(profile: &FileProfile) {
+        let missing: u64 = profile.profile.iter().map(|col| col.missing as u64).sum();
+        assert_eq!(profile.cells, profile.rows as u64 * profile.columns as u64);
+        assert_eq!(profile.filled_cells + missing, profile.cells);
+        if profile.cells == 0 {
+            assert_eq!(profile.filled_pct, 0.0);
+        } else {
+            let expected = 100.0 * profile.filled_cells as f64 / profile.cells as f64;
+            assert!((profile.filled_pct - expected).abs() < 1e-9);
+        }
+        let json: serde_json::Value = serde_json::from_str(&profile.to_json().unwrap()).unwrap();
+        assert_eq!(json["cells"].as_u64(), Some(profile.cells));
+        assert_eq!(json["filled_cells"].as_u64(), Some(profile.filled_cells));
+        assert!(json.get("missing").is_none() || json["profile"][0].get("missing").is_none());
+        match profile.file_rows {
+            Some(rows) => assert_eq!(json["file_rows"].as_u64(), Some(rows as u64)),
+            None => assert!(json["file_rows"].is_null()),
+        }
+    }
+
+    #[test]
+    fn empty_strings_are_missing_and_totals_match() {
+        let frame = DataFrame::new(vec![
+            Series::new(
+                "s".into(),
+                &[Some("a"), Some(""), None, Some(" "), Some("a")],
+            )
+            .into(),
+            Series::new("n".into(), &[Some(1i64), Some(2), None, Some(4), Some(5)]).into(),
+        ])
+        .unwrap();
+        let profile = profile_loaded(
+            Path::new("mem.csv"),
+            load::Loaded {
+                df: frame,
+                kind: crate::load::FileKind::Csv { sep: b',' },
+                outcome: crate::load::ReadOutcome::full(),
+                sheet: None,
+                warnings: Vec::new(),
+            },
+        );
+        let text = &profile.profile[0];
+        assert_eq!(
+            text.missing, 2,
+            "null and \"\" are missing; a space is data"
+        );
+        assert!((text.missing_pct - 40.0).abs() < 1e-9);
+        assert_eq!(text.min.as_ref().unwrap().to_display(), " ");
+        assert!(text.top_values.iter().all(|value| !value.value.is_empty()));
+        assert_eq!(text.distinct, 3);
+        assert_eq!(profile.profile[1].missing, 1);
+        assert_eq!(profile.rows, 5);
+        assert_eq!(profile.columns, 2);
+        assert_eq!(profile.cells, 10);
+        assert_eq!(profile.filled_cells, 7);
+        assert_eq!(profile.file_rows, Some(5));
+        totals_agree(&profile);
+    }
+
+    #[test]
+    fn header_only_csv_has_zero_cells() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv = dir.path().join("header.csv");
+        std::fs::write(&csv, "a,b,c\n").unwrap();
+        let profile = profile_path(&csv, &ProfileOptions::default()).unwrap();
+        assert_eq!(profile.rows, 0);
+        assert_eq!(profile.columns, 3);
+        assert_eq!(profile.cells, 0);
+        assert_eq!(profile.filled_cells, 0);
+        assert_eq!(profile.filled_pct, 0.0);
+        assert_eq!(profile.file_rows, Some(0));
+        assert!(profile.profile.iter().all(|col| col.missing == 0));
+        totals_agree(&profile);
+    }
+
+    #[test]
+    fn quoted_csv_and_tsv_empty_strings_are_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv = dir.path().join("q.csv");
+        // Quoted "", a missing field, and a whitespace cell.
+        std::fs::write(&csv, "s,n\na,1\n\"\",\n,3\n\" \",4\n").unwrap();
+        let profile = profile_path(&csv, &ProfileOptions::default()).unwrap();
+        assert_eq!(profile.profile[0].missing, 2);
+        assert_eq!(profile.profile[0].min.as_ref().unwrap().to_display(), " ");
+        assert!(profile.profile[0]
+            .top_values
+            .iter()
+            .all(|value| !value.value.is_empty()));
+        assert_eq!(profile.profile[1].missing, 1);
+        totals_agree(&profile);
+
+        let tsv = dir.path().join("q.tsv");
+        std::fs::write(&tsv, "note\nhello\n\"\"\n").unwrap();
+        let profile = profile_path(&tsv, &ProfileOptions::default()).unwrap();
+        let note = profile
+            .profile
+            .iter()
+            .find(|col| col.name == "note")
+            .unwrap();
+        assert_eq!(note.missing, 1);
+        totals_agree(&profile);
+    }
+
+    #[test]
+    fn file_rows_follow_the_loader() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut body = String::from("n,label\n");
+        for i in 0..40 {
+            let label = if i % 2 == 0 { "" } else { "x" };
+            body.push_str(&format!("{i},{label}\n"));
+        }
+        let csv = dir.path().join("n.csv");
+        std::fs::write(&csv, &body).unwrap();
+
+        let head = profile_path(
+            &csv,
+            &ProfileOptions {
+                columns: None,
+                rows: RowSelect::Head(10),
+                sheet: None,
+                strict: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(head.mode, ReadMode::Head);
+        assert_eq!(head.rows, 10);
+        assert_eq!(head.file_rows, None);
+        assert_eq!(head.cells, 20);
+        totals_agree(&head);
+
+        let sample = profile_path(
+            &csv,
+            &ProfileOptions {
+                columns: None,
+                rows: RowSelect::Sample {
+                    n: 10,
+                    seed: Some(1),
+                },
+                sheet: None,
+                strict: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(sample.mode, ReadMode::Random);
+        assert_eq!(sample.rows, 10);
+        assert_eq!(sample.file_rows, Some(40));
+        totals_agree(&sample);
+
+        let jsonl = dir.path().join("n.jsonl");
+        let mut lines = String::new();
+        for i in 0..40 {
+            let label = if i % 3 == 0 { "" } else { "x" };
+            lines.push_str(&format!("{{\"n\":{i},\"label\":\"{label}\"}}\n"));
+        }
+        std::fs::write(&jsonl, lines).unwrap();
+        let json_sample = profile_path(
+            &jsonl,
+            &ProfileOptions {
+                columns: None,
+                rows: RowSelect::Sample {
+                    n: 8,
+                    seed: Some(2),
+                },
+                sheet: None,
+                strict: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(json_sample.file_rows, Some(40));
+        totals_agree(&json_sample);
+        let json_full = profile_path(&jsonl, &ProfileOptions::default()).unwrap();
+        let label = json_full
+            .profile
+            .iter()
+            .find(|col| col.name == "label")
+            .unwrap();
+        assert!(label.missing > 0, "JSONL \"\" counts as missing");
+        assert!(label.top_values.iter().all(|value| !value.value.is_empty()));
+        totals_agree(&json_full);
+
+        let loaded = crate::load::load(&csv, None, RowSelect::All, None).unwrap();
+        let mut frame = loaded.df;
+        let pq = dir.path().join("n.parquet");
+        {
+            let mut file = std::fs::File::create(&pq).unwrap();
+            ParquetWriter::new(&mut file).finish(&mut frame).unwrap();
+        }
+        // Quoted-empty equivalent: a real empty string stored in Parquet.
+        let mut stored = DataFrame::new(vec![Series::new(
+            "s".into(),
+            &[Some("a"), Some(""), None, Some("b")],
+        )
+        .into()])
+        .unwrap();
+        let empty_pq = dir.path().join("empty.parquet");
+        {
+            let mut file = std::fs::File::create(&empty_pq).unwrap();
+            ParquetWriter::new(&mut file).finish(&mut stored).unwrap();
+        }
+        let parquet_empty = profile_path(&empty_pq, &ProfileOptions::default()).unwrap();
+        assert_eq!(parquet_empty.profile[0].missing, 2);
+        assert_ne!(
+            parquet_empty.profile[0].min.as_ref().unwrap().to_display(),
+            ""
+        );
+        totals_agree(&parquet_empty);
+
+        let parquet_head = profile_path(
+            &pq,
+            &ProfileOptions {
+                columns: None,
+                rows: RowSelect::Head(7),
+                sheet: None,
+                strict: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(parquet_head.mode, ReadMode::Head);
+        assert_eq!(parquet_head.rows, 7);
+        assert_eq!(parquet_head.file_rows, Some(40));
+        totals_agree(&parquet_head);
     }
 }
