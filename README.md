@@ -42,33 +42,33 @@ standing up pandas.
 
 ## Getting started
 
-v0.2.0 binaries are on the
-[GitHub release](https://github.com/Jherin89/datapeek/releases/tag/v0.2.0).
+v0.3.0 binaries are on the
+[GitHub release](https://github.com/Jherin89/datapeek/releases/tag/v0.3.0).
 Pick the archive that matches your machine. Each one unpacks to a directory
 of the same name, with the `datapeek` binary, `LICENSE`, and `README.md`.
 
 | Machine | Asset |
 | --- | --- |
-| macOS Apple Silicon | `datapeek-v0.2.0-aarch64-apple-darwin.tar.gz` |
-| macOS Intel | `datapeek-v0.2.0-x86_64-apple-darwin.tar.gz` |
-| Linux x86_64 | `datapeek-v0.2.0-x86_64-unknown-linux-gnu.tar.gz` |
-| Windows x86_64 | `datapeek-v0.2.0-x86_64-pc-windows-msvc.zip` |
+| macOS Apple Silicon | `datapeek-v0.3.0-aarch64-apple-darwin.tar.gz` |
+| macOS Intel | `datapeek-v0.3.0-x86_64-apple-darwin.tar.gz` |
+| Linux x86_64 | `datapeek-v0.3.0-x86_64-unknown-linux-gnu.tar.gz` |
+| Windows x86_64 | `datapeek-v0.3.0-x86_64-pc-windows-msvc.zip` |
 
-`datapeek --version` prints `datapeek 0.2.0`.
+`datapeek --version` prints `datapeek 0.3.0`.
 
 ### macOS (Apple Silicon)
 
 1. Download the Apple Silicon archive.
 
    ```bash
-   curl -fL -o datapeek-v0.2.0-aarch64-apple-darwin.tar.gz \
-     https://github.com/Jherin89/datapeek/releases/download/v0.2.0/datapeek-v0.2.0-aarch64-apple-darwin.tar.gz
+   curl -fL -o datapeek-v0.3.0-aarch64-apple-darwin.tar.gz \
+     https://github.com/Jherin89/datapeek/releases/download/v0.3.0/datapeek-v0.3.0-aarch64-apple-darwin.tar.gz
    ```
 
 2. Extract it.
 
    ```bash
-   tar -xzf datapeek-v0.2.0-aarch64-apple-darwin.tar.gz
+   tar -xzf datapeek-v0.3.0-aarch64-apple-darwin.tar.gz
    ```
 
 3. Clear the Gatekeeper quarantine attribute. macOS adds
@@ -78,7 +78,7 @@ of the same name, with the `datapeek` binary, `LICENSE`, and `README.md`.
    run:
 
    ```bash
-   xattr -d com.apple.quarantine datapeek-v0.2.0-aarch64-apple-darwin/datapeek
+   xattr -d com.apple.quarantine datapeek-v0.3.0-aarch64-apple-darwin/datapeek
    ```
 
    If `xattr` reports `No such xattr: com.apple.quarantine`, the file was not
@@ -86,13 +86,13 @@ of the same name, with the `datapeek` binary, `LICENSE`, and `README.md`.
    attribute on the whole folder:
 
    ```bash
-   xattr -dr com.apple.quarantine datapeek-v0.2.0-aarch64-apple-darwin
+   xattr -dr com.apple.quarantine datapeek-v0.3.0-aarch64-apple-darwin
    ```
 
 4. Put the binary on `PATH`. `/usr/local/bin` is already on the default PATH:
 
    ```bash
-   sudo install -m 755 datapeek-v0.2.0-aarch64-apple-darwin/datapeek /usr/local/bin/datapeek
+   sudo install -m 755 datapeek-v0.3.0-aarch64-apple-darwin/datapeek /usr/local/bin/datapeek
    ```
 
    Without `sudo`, install into a user directory and add it to `PATH` (zsh is
@@ -100,7 +100,7 @@ of the same name, with the `datapeek` binary, `LICENSE`, and `README.md`.
 
    ```bash
    mkdir -p "$HOME/.local/bin"
-   install -m 755 datapeek-v0.2.0-aarch64-apple-darwin/datapeek "$HOME/.local/bin/datapeek"
+   install -m 755 datapeek-v0.3.0-aarch64-apple-darwin/datapeek "$HOME/.local/bin/datapeek"
    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
    source "$HOME/.zshrc"
    ```
@@ -113,15 +113,15 @@ of the same name, with the `datapeek` binary, `LICENSE`, and `README.md`.
 
 ### macOS (Intel)
 
-Same steps, with the Intel archive `datapeek-v0.2.0-x86_64-apple-darwin.tar.gz`
-and the folder `datapeek-v0.2.0-x86_64-apple-darwin`.
+Same steps, with the Intel archive `datapeek-v0.3.0-x86_64-apple-darwin.tar.gz`
+and the folder `datapeek-v0.3.0-x86_64-apple-darwin`.
 
 ```bash
-curl -fL -o datapeek-v0.2.0-x86_64-apple-darwin.tar.gz \
-  https://github.com/Jherin89/datapeek/releases/download/v0.2.0/datapeek-v0.2.0-x86_64-apple-darwin.tar.gz
-tar -xzf datapeek-v0.2.0-x86_64-apple-darwin.tar.gz
-xattr -d com.apple.quarantine datapeek-v0.2.0-x86_64-apple-darwin/datapeek
-sudo install -m 755 datapeek-v0.2.0-x86_64-apple-darwin/datapeek /usr/local/bin/datapeek
+curl -fL -o datapeek-v0.3.0-x86_64-apple-darwin.tar.gz \
+  https://github.com/Jherin89/datapeek/releases/download/v0.3.0/datapeek-v0.3.0-x86_64-apple-darwin.tar.gz
+tar -xzf datapeek-v0.3.0-x86_64-apple-darwin.tar.gz
+xattr -d com.apple.quarantine datapeek-v0.3.0-x86_64-apple-darwin/datapeek
+sudo install -m 755 datapeek-v0.3.0-x86_64-apple-darwin/datapeek /usr/local/bin/datapeek
 datapeek --version
 ```
 
@@ -130,10 +130,10 @@ datapeek --version
 The Linux asset is a gzip-compressed tar. There is no quarantine attribute.
 
 ```bash
-curl -fL -o datapeek-v0.2.0-x86_64-unknown-linux-gnu.tar.gz \
-  https://github.com/Jherin89/datapeek/releases/download/v0.2.0/datapeek-v0.2.0-x86_64-unknown-linux-gnu.tar.gz
-tar -xzf datapeek-v0.2.0-x86_64-unknown-linux-gnu.tar.gz
-sudo install -m 755 datapeek-v0.2.0-x86_64-unknown-linux-gnu/datapeek /usr/local/bin/datapeek
+curl -fL -o datapeek-v0.3.0-x86_64-unknown-linux-gnu.tar.gz \
+  https://github.com/Jherin89/datapeek/releases/download/v0.3.0/datapeek-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf datapeek-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
+sudo install -m 755 datapeek-v0.3.0-x86_64-unknown-linux-gnu/datapeek /usr/local/bin/datapeek
 datapeek --version
 ```
 
@@ -141,7 +141,7 @@ For a user install instead of `/usr/local/bin`:
 
 ```bash
 mkdir -p "$HOME/.local/bin"
-install -m 755 datapeek-v0.2.0-x86_64-unknown-linux-gnu/datapeek "$HOME/.local/bin/datapeek"
+install -m 755 datapeek-v0.3.0-x86_64-unknown-linux-gnu/datapeek "$HOME/.local/bin/datapeek"
 export PATH="$HOME/.local/bin:$PATH"
 datapeek --version
 ```
@@ -159,28 +159,28 @@ Extract it with `Expand-Archive`. `unzip` works too. Do not extract it with
 
    ```powershell
    Invoke-WebRequest `
-     -Uri https://github.com/Jherin89/datapeek/releases/download/v0.2.0/datapeek-v0.2.0-x86_64-pc-windows-msvc.zip `
-     -OutFile datapeek-v0.2.0-x86_64-pc-windows-msvc.zip
+     -Uri https://github.com/Jherin89/datapeek/releases/download/v0.3.0/datapeek-v0.3.0-x86_64-pc-windows-msvc.zip `
+     -OutFile datapeek-v0.3.0-x86_64-pc-windows-msvc.zip
    ```
 
-2. Extract it. This creates `datapeek-v0.2.0-x86_64-pc-windows-msvc\`
+2. Extract it. This creates `datapeek-v0.3.0-x86_64-pc-windows-msvc\`
    containing `datapeek.exe`, `LICENSE`, and `README.md`.
 
    ```powershell
-   Expand-Archive -Path datapeek-v0.2.0-x86_64-pc-windows-msvc.zip -DestinationPath .
+   Expand-Archive -Path datapeek-v0.3.0-x86_64-pc-windows-msvc.zip -DestinationPath .
    ```
 
 3. Confirm the binary before changing `PATH`.
 
    ```powershell
-   .\datapeek-v0.2.0-x86_64-pc-windows-msvc\datapeek.exe --version
+   .\datapeek-v0.3.0-x86_64-pc-windows-msvc\datapeek.exe --version
    ```
 
 4. Add that folder to your user `Path`, then open a new terminal so the
    change is picked up.
 
    ```powershell
-   $dir = (Resolve-Path .\datapeek-v0.2.0-x86_64-pc-windows-msvc).Path
+   $dir = (Resolve-Path .\datapeek-v0.3.0-x86_64-pc-windows-msvc).Path
    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
    if ($userPath -notlike "*$dir*") {
      [Environment]::SetEnvironmentVariable('Path', "$userPath;$dir", 'User')
@@ -216,7 +216,7 @@ on `PATH`.
 Then install datapeek from this repository:
 
 ```bash
-cargo install --git https://github.com/Jherin89/datapeek --tag v0.2.0
+cargo install --git https://github.com/Jherin89/datapeek --tag v0.3.0
 datapeek --version
 ```
 
@@ -234,7 +234,7 @@ macOS or Linux:
 ```bash
 git clone https://github.com/Jherin89/datapeek
 cd datapeek
-git checkout v0.2.0
+git checkout v0.3.0
 cargo build --release
 sudo install -m 755 target/release/datapeek /usr/local/bin/datapeek
 datapeek --version
@@ -245,7 +245,7 @@ Windows (PowerShell), after Rust is on `PATH`:
 ```powershell
 git clone https://github.com/Jherin89/datapeek
 cd datapeek
-git checkout v0.2.0
+git checkout v0.3.0
 cargo build --release
 .\target\release\datapeek.exe --version
 ```
