@@ -11,7 +11,7 @@ Set Shell bash
 Set FontFamily "DejaVu Sans Mono"
 Set FontSize 15
 Set Width 1280
-Set Height 680
+Set Height 460
 Set Padding 18
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 8ms
