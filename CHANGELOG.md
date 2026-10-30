@@ -5,6 +5,12 @@ All notable changes to datapeek are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- CLI regression tests using real `.xls`, `.xlsm`, and `.xlsb` workbook fixtures, covering values, dates, totals, row and column selection, seeded sampling, and sheet errors. Fixtures run offline without Excel.
+
 ## [0.3.0] - 2026-10-24
 
 ### Added
