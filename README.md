@@ -338,6 +338,35 @@ datapeek samples/metrics.jsonl
 datapeek samples/orders.xlsx
 ```
 
+### Check a legacy Excel workbook
+
+The same commands work for `.xls`, `.xlsm`, and `.xlsb`; no Excel installation
+is needed. The first row of the selected sheet supplies column names.
+
+1. Profile the default sheet:
+
+   ```bash
+   datapeek workbook.xls
+   ```
+
+2. Select a sheet by its exact name (or a 0-based index):
+
+   ```bash
+   datapeek --sheet "Sales" workbook.xlsb
+   ```
+
+3. Inspect a few rows, or select columns for JSON output:
+
+   ```bash
+   datapeek --head 10 workbook.xlsm
+   datapeek --json --columns "customer,amount" workbook.xlsb
+   ```
+
+For a reproducible check from the repository root, run
+`cargo test --test excel_formats`. The checked-in
+[real workbook fixtures](tests/fixtures/excel/README.md) exercise all three
+formats offline, including date typing, seeded sampling, and sheet errors.
+
 ### Reading the table
 
 | Column | Meaning |
